@@ -148,7 +148,7 @@
       bottom: -100px;
       left: 50%;
       transform: translateX(-50%);
-      background: rgba(28, 28, 30, 0.9);
+      background: rgba(28, 28, 30, 0.94);
       -webkit-backdrop-filter: blur(20px);
       backdrop-filter: blur(20px);
       border: 1px solid rgba(255, 255, 255, 0.1);
@@ -162,12 +162,12 @@
       transition: bottom 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275), opacity 0.3s;
       opacity: 0;
       pointer-events: none;
-      max-width: 90%;
+      max-width: min(90%, 560px);
       text-align: center;
       cursor: pointer;
     }
     html.light .ios-toast {
-      background: rgba(255, 255, 255, 0.9);
+      background: rgba(255, 255, 255, 0.94);
       border: 1px solid rgba(0, 0, 0, 0.1);
       color: #000000;
       box-shadow: 0 8px 24px rgba(0,0,0,0.1);
@@ -181,10 +181,56 @@
     .toggle-thumb {
       transition: transform 0.3s cubic-bezier(0.175, 0.885, 0.275, 1.275);
     }
+
+    .status-pill {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 28px;
+      padding: 0 10px;
+      border-radius: 999px;
+      font-size: 11px;
+      line-height: 1;
+      font-weight: 800;
+      letter-spacing: 0.03em;
+      white-space: nowrap;
+      flex-shrink: 0;
+    }
+
+    .status-dot {
+      width: 7px;
+      height: 7px;
+      border-radius: 999px;
+      margin-right: 7px;
+      background: currentColor;
+    }
+
+    .status-active {
+      animation: uploadPulse 1.4s ease-in-out infinite;
+    }
+
+    @keyframes uploadPulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.58; }
+    }
+
+    .url-card {
+      transition: transform 0.2s ease, background-color 0.2s ease, border-color 0.2s ease;
+    }
+
+    .url-card:active {
+      transform: scale(0.99);
+    }
+
+    .preview-frame {
+      background-image: linear-gradient(135deg, rgba(127,127,127,0.06) 25%, transparent 25%, transparent 50%, rgba(127,127,127,0.06) 50%, rgba(127,127,127,0.06) 75%, transparent 75%, transparent);
+      background-size: 18px 18px;
+    }
     
     @media (max-width: 420px) {
       .file-name { font-size: 13px; }
       .ad-layer { display: none; }
+      .ios-toast { max-width: calc(100% - 24px); }
     }
   </style>
   <script>
@@ -241,6 +287,13 @@
         </label>
       </div>
 
+      <div id="selectionMeta" class="hidden w-full px-1">
+        <div class="flex flex-wrap items-center justify-between gap-2 text-xs font-bold text-gray-500 uppercase tracking-wider">
+          <span id="selectionCount"></span>
+          <span id="selectionSize"></span>
+        </div>
+      </div>
+
       <div id="selectedList" class="grid gap-3 w-full empty:hidden"></div>
 
       <div class="flex gap-3 w-full">
@@ -249,13 +302,19 @@
       </div>
 
       <div id="overallProgressWrap" class="hidden w-full bg-white dark:bg-[#0a0a0a] p-5 rounded-3xl border border-gray-200 dark:border-gray-800">
-        <div class="text-xs font-bold text-gray-500 mb-3 uppercase tracking-wider" data-key="prog-title"></div>
+        <div class="flex items-start justify-between gap-3 mb-3">
+          <div>
+            <div class="text-xs font-bold text-gray-500 uppercase tracking-wider" data-key="prog-title"></div>
+            <div id="overallStatusText" class="text-sm font-extrabold text-black dark:text-white mt-1"></div>
+          </div>
+          <div id="overallPct" class="font-mono font-extrabold text-black dark:text-white">0%</div>
+        </div>
         <div class="w-full bg-gray-200 dark:bg-gray-800 rounded-full h-2 overflow-hidden">
           <div id="overallProgressFill" style="width:0%" class="h-2 rounded-full transition-all duration-300 bg-black dark:bg-white"></div>
         </div>
-        <div class="flex justify-between items-center mt-3 text-sm">
-          <div id="overallPct" class="font-mono font-bold text-black dark:text-white">0%</div>
+        <div class="flex flex-wrap justify-between items-center gap-2 mt-3 text-sm">
           <div id="overallInfo" class="text-gray-600 dark:text-gray-400 font-medium"></div>
+          <div id="overallCounts" class="text-gray-600 dark:text-gray-400 font-semibold"></div>
         </div>
       </div>
 
@@ -299,18 +358,32 @@
         'btn-cancel': "Anile",
         'prog-title': "Pwogrè total",
         'err-select': "Tanpri chwazi omwen yon fichye.",
-        'msg-start': "Kòmanse upload...",
+        'msg-start': "Upload yo kòmanse an paralèl...",
+        'msg-preparing': "Preparasyon...",
+        'msg-uploading': "Upload R2 an kou...",
+        'msg-verifying': "Verifikasyon...",
+        'msg-completed': "Konplete",
+        'msg-cancelled': "Anile pa itilizatè",
         'msg-copy-ok': "Kopye avek siksè",
         'msg-copy-err': "Erè kopye",
-        'msg-completed': "Konplete",
         'msg-err-user': "Anile pa itilizatè",
         'msg-err-network': "Erè rezo",
-        'msg-err-server': "Erè sèvè oswa fòma pa bon",
+        'msg-err-server': "Erè sèvè oswa kapasite",
+        'msg-err-r2': "Erè pandan upload R2",
         'msg-err-generic': "Erè sanzatann",
         'msg-final-err': "Fen: {s} siksè, {f} erè, {a} anile.",
-        'msg-final-ok': "Fen: {s} siksè, 0 erè.",
-        'msg-cancel-all': "Anile tout...",
-        'url-dl': "telechaje"
+        'msg-final-ok': "Fen: {s} upload fini.",
+        'msg-cancel-all': "Anile tout upload yo...",
+        'msg-running': "{a} upload an kou",
+        'msg-summary': "{s} fini · {f} erè · {a} anile",
+        'msg-bytes': "{l} / {t}",
+        'url-label': "URL {n}",
+        'open': "Louvri",
+        'copy': "Kopye",
+        'file': "fichye",
+        'files': "fichye",
+        'selected': "chwazi",
+        'total': "total"
       },
       fr: {
         'drop-title': "Cliquez ou glissez les fichiers ici",
@@ -319,18 +392,32 @@
         'btn-cancel': "Annuler",
         'prog-title': "Progression totale",
         'err-select': "Veuillez choisir au moins un fichier.",
-        'msg-start': "Début de l'upload...",
+        'msg-start': "Les uploads démarrent en parallèle...",
+        'msg-preparing': "Préparation...",
+        'msg-uploading': "Upload direct vers R2...",
+        'msg-verifying': "Vérification...",
+        'msg-completed': "Terminé",
+        'msg-cancelled': "Annulé par l'utilisateur",
         'msg-copy-ok': "Copié avec succès",
         'msg-copy-err': "Erreur de copie",
-        'msg-completed': "Terminé",
         'msg-err-user': "Annulé par l'utilisateur",
         'msg-err-network': "Erreur réseau",
-        'msg-err-server': "Erreur serveur ou format invalide",
+        'msg-err-server': "Erreur serveur ou capacité insuffisante",
+        'msg-err-r2': "Erreur pendant l'upload R2",
         'msg-err-generic': "Erreur inattendue",
-        'msg-final-err': "Fin: {s} succès, {f} erreurs, {a} annulés.",
-        'msg-final-ok': "Fin: {s} succès, 0 erreur.",
-        'msg-cancel-all': "Annulation totale...",
-        'url-dl': "telecharger"
+        'msg-final-err': "Fin : {s} succès, {f} erreurs, {a} annulés.",
+        'msg-final-ok': "Fin : {s} upload(s) terminé(s).",
+        'msg-cancel-all': "Annulation de tous les uploads...",
+        'msg-running': "{a} upload(s) en cours",
+        'msg-summary': "{s} terminé(s) · {f} erreur(s) · {a} annulé(s)",
+        'msg-bytes': "{l} / {t}",
+        'url-label': "URL {n}",
+        'open': "Ouvrir",
+        'copy': "Copier",
+        'file': "fichier",
+        'files': "fichiers",
+        'selected': "sélectionné(s)",
+        'total': "total"
       },
       en: {
         'drop-title': "Click or drag files here",
@@ -339,18 +426,32 @@
         'btn-cancel': "Cancel",
         'prog-title': "Total progress",
         'err-select': "Please select at least one file.",
-        'msg-start': "Starting upload...",
+        'msg-start': "Uploads are starting in parallel...",
+        'msg-preparing': "Preparing...",
+        'msg-uploading': "Uploading directly to R2...",
+        'msg-verifying': "Verifying...",
+        'msg-completed': "Completed",
+        'msg-cancelled': "Cancelled by user",
         'msg-copy-ok': "Copied successfully",
         'msg-copy-err': "Copy error",
-        'msg-completed': "Completed",
         'msg-err-user': "Cancelled by user",
         'msg-err-network': "Network error",
-        'msg-err-server': "Server error or invalid format",
+        'msg-err-server': "Server or capacity error",
+        'msg-err-r2': "R2 upload error",
         'msg-err-generic': "Unexpected error",
-        'msg-final-err': "End: {s} success, {f} errors, {a} cancelled.",
-        'msg-final-ok': "End: {s} success, 0 error.",
-        'msg-cancel-all': "Cancelling all...",
-        'url-dl': "download"
+        'msg-final-err': "Done: {s} success, {f} errors, {a} cancelled.",
+        'msg-final-ok': "Done: {s} upload(s) completed.",
+        'msg-cancel-all': "Cancelling all uploads...",
+        'msg-running': "{a} upload(s) in progress",
+        'msg-summary': "{s} completed · {f} failed · {a} cancelled",
+        'msg-bytes': "{l} / {t}",
+        'url-label': "URL {n}",
+        'open': "Open",
+        'copy': "Copy",
+        'file': "file",
+        'files': "files",
+        'selected': "selected",
+        'total': "total"
       },
       es: {
         'drop-title': "Haz clic o arrastra archivos aquí",
@@ -359,18 +460,32 @@
         'btn-cancel': "Cancelar",
         'prog-title': "Progreso total",
         'err-select': "Por favor, seleccione al menos un archivo.",
-        'msg-start': "Iniciando subida...",
+        'msg-start': "Las subidas comienzan en paralelo...",
+        'msg-preparing': "Preparando...",
+        'msg-uploading': "Subiendo directamente a R2...",
+        'msg-verifying': "Verificando...",
+        'msg-completed': "Completado",
+        'msg-cancelled': "Cancelado por el usuario",
         'msg-copy-ok': "Copiado con éxito",
         'msg-copy-err': "Error al copiar",
-        'msg-completed': "Completado",
         'msg-err-user': "Cancelado por el usuario",
         'msg-err-network': "Error de red",
-        'msg-err-server': "Error del servidor o formato no válido",
+        'msg-err-server': "Error del servidor o capacidad insuficiente",
+        'msg-err-r2': "Error durante la subida a R2",
         'msg-err-generic': "Error inesperado",
         'msg-final-err': "Fin: {s} éxito, {f} errores, {a} cancelados.",
-        'msg-final-ok': "Fin: {s} éxito, 0 error.",
-        'msg-cancel-all': "Cancelando todo...",
-        'url-dl': "descargar"
+        'msg-final-ok': "Fin: {s} subida(s) completada(s).",
+        'msg-cancel-all': "Cancelando todas las subidas...",
+        'msg-running': "{a} subida(s) en curso",
+        'msg-summary': "{s} completado(s) · {f} error(es) · {a} cancelado(s)",
+        'msg-bytes': "{l} / {t}",
+        'url-label': "URL {n}",
+        'open': "Abrir",
+        'copy': "Copiar",
+        'file': "archivo",
+        'files': "archivos",
+        'selected': "seleccionado(s)",
+        'total': "total"
       }
     };
 
@@ -405,12 +520,15 @@
         const t = tr[currentLang];
         document.querySelectorAll('[data-key]').forEach(el => {
             const k = el.dataset.key;
-            if(t[k]) {
-                if(el.tagName === 'INPUT') el.placeholder = t[k];
+            if (t[k]) {
+                if (el.tagName === 'INPUT') el.placeholder = t[k];
                 else el.innerText = t[k];
             }
         });
         document.documentElement.lang = currentLang;
+        updateDynamicTexts();
+        renderSelectionMeta();
+        if (uploading) updateOverall();
     }
 
     function setLang(lang) {
@@ -421,7 +539,6 @@
         currentLang = lang;
         localStorage.setItem('language', lang);
         applyTranslations();
-        updateDynamicTexts();
         closeMenu();
     }
 
@@ -443,7 +560,7 @@
         toast.innerText = msg;
         toast.classList.add('show');
         if (window.toastTimeout) clearTimeout(window.toastTimeout);
-        window.toastTimeout = setTimeout(() => hideToast(), 3000);
+        window.toastTimeout = setTimeout(() => hideToast(), 3600);
     }
 
     function hideToast() {
@@ -502,72 +619,89 @@
     const fileInput = document.getElementById('fileInput');
     const dropzoneLabel = document.getElementById('dropzoneLabel');
     const selectedList = document.getElementById('selectedList');
+    const selectionMeta = document.getElementById('selectionMeta');
+    const selectionCount = document.getElementById('selectionCount');
+    const selectionSize = document.getElementById('selectionSize');
     const uploadBtn = document.getElementById('uploadBtn');
     const cancelAllBtn = document.getElementById('cancelAllBtn');
     const overallProgressWrap = document.getElementById('overallProgressWrap');
     const overallProgressFill = document.getElementById('overallProgressFill');
     const overallPct = document.getElementById('overallPct');
+    const overallStatusText = document.getElementById('overallStatusText');
     const overallInfo = document.getElementById('overallInfo');
+    const overallCounts = document.getElementById('overallCounts');
     const previewAll = document.getElementById('previewAll');
 
     let filesArray = [];
-    let xhrs = new Map();
+    const requests = new Map();
     let uploading = false;
     let hasUploaded = false;
+    let uploadStates = [];
+    let activeUploadRun = 0;
 
     function humanFileSize(bytes) {
       const thresh = 1024;
-      if (Math.abs(bytes) < thresh) return bytes + ' B';
+      if (!Number.isFinite(bytes)) return '0 B';
+      if (Math.abs(bytes) < thresh) return `${Math.max(0, bytes)} B`;
       const units = ['KB','MB','GB','TB','PB','EB','ZB','YB'];
       let u = -1;
+      let value = bytes;
       do {
-        bytes /= thresh;
+        value /= thresh;
         ++u;
-      } while(Math.abs(bytes) >= thresh && u < units.length - 1);
-      return bytes.toFixed(1)+' '+units[u];
+      } while (Math.abs(value) >= thresh && u < units.length - 1);
+      return `${value.toFixed(1)} ${units[u]}`;
     }
 
     function escapeHtml(unsafe) {
       return String(unsafe)
-        .replace(/&/g, "&amp;")
-        .replace(/</g, "&lt;")
-        .replace(/>/g, "&gt;")
-        .replace(/"/g, "&quot;")
-        .replace(/'/g, "&#039;");
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#039;');
     }
 
     function getUIDisplayName(name) {
-      if (name.length > 25) {
-        return name.substring(0, 25) + '....';
-      }
+      if (name.length > 25) return `${name.substring(0, 25)}....`;
       return name;
     }
-    
+
+    function formatText(key, values = {}) {
+      let value = tr[currentLang][key] || key;
+      Object.entries(values).forEach(([name, replacement]) => {
+        value = value.replace(`{${name}}`, String(replacement));
+      });
+      return value;
+    }
+
     function updateDynamicTexts() {
         const t = tr[currentLang];
         document.querySelectorAll('.btn-cancel-dynamic').forEach(btn => {
             btn.innerText = t['btn-cancel'];
         });
-        document.querySelectorAll('.msg-completed-dynamic').forEach(el => {
-            el.innerText = t['msg-completed'];
+        document.querySelectorAll('.status-dynamic').forEach(el => {
+            const key = el.dataset.statusKey;
+            if (key && t[key]) el.innerText = t[key];
         });
-        document.querySelectorAll('.msg-err-user-dynamic').forEach(el => {
-            el.innerText = t['msg-err-user'];
-        });
-        document.querySelectorAll('.msg-err-net-dynamic').forEach(el => {
-            el.innerText = t['msg-err-network'];
-        });
-        document.querySelectorAll('.msg-err-srv-dynamic').forEach(el => {
-            el.innerText = t['msg-err-server'];
-        });
-        document.querySelectorAll('.msg-err-gen-dynamic').forEach(el => {
-            el.innerText = t['msg-err-generic'];
-        });
+    }
+
+    function renderSelectionMeta() {
+        const count = filesArray.length;
+        if (!count || uploading) {
+            selectionMeta.classList.add('hidden');
+            return;
+        }
+        const totalSize = filesArray.reduce((sum, file) => sum + file.size, 0);
+        selectionMeta.classList.remove('hidden');
+        selectionCount.textContent = `${count} ${count === 1 ? tr[currentLang]['file'] : tr[currentLang]['files']} ${tr[currentLang]['selected']}`;
+        selectionSize.textContent = `${humanFileSize(totalSize)} ${tr[currentLang]['total']}`;
     }
 
     function renderSelectedList() {
       selectedList.innerHTML = '';
-      if (filesArray.length === 0) return;
+      renderSelectionMeta();
+      if (filesArray.length === 0 || uploading) return;
 
       const grid = document.createElement('div');
       grid.className = 'space-y-3 w-full';
@@ -581,7 +715,7 @@
 
         const icon = document.createElement('div');
         icon.className = 'w-12 h-12 flex-shrink-0 rounded-2xl bg-gray-100 dark:bg-[#111111] flex items-center justify-center text-xs font-bold text-black dark:text-white uppercase tracking-wider';
-        icon.textContent = file.type && file.type.startsWith('video') ? 'VID' : 'FILE';
+        icon.textContent = file.type && file.type.startsWith('video') ? 'VID' : file.type && file.type.startsWith('image') ? 'IMG' : 'FILE';
 
         const titleWrap = document.createElement('div');
         titleWrap.className = 'flex-1 min-w-0 flex flex-col justify-center overflow-hidden';
@@ -604,10 +738,12 @@
 
         const removeBtn = document.createElement('button');
         removeBtn.className = 'w-10 h-10 flex items-center justify-center rounded-full bg-gray-100 dark:bg-[#111111] text-black dark:text-white hover:bg-gray-200 dark:hover:bg-gray-800 transition-colors';
+        removeBtn.setAttribute('aria-label', 'remove');
         removeBtn.innerHTML = '<svg class="w-5 h-5 pointer-events-none" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path></svg>';
         removeBtn.onclick = () => {
           if (uploading) return;
           filesArray.splice(idx, 1);
+          fileInput.value = '';
           renderSelectedList();
         };
 
@@ -620,16 +756,582 @@
       selectedList.appendChild(grid);
     }
 
+    function setFileState(index, state, key, extraText = '') {
+        const ui = uploadStates[index];
+        if (!ui) return;
+        ui.state = state;
+        ui.statusKey = key || '';
+        ui.statusText = extraText || '';
+        const statusTone = {
+          preparing: 'bg-gray-100 text-black dark:bg-[#161616] dark:text-white',
+          uploading: 'bg-black text-white dark:bg-white dark:text-black',
+          verifying: 'bg-gray-100 text-black dark:bg-[#161616] dark:text-white',
+          success: 'bg-black text-white dark:bg-white dark:text-black',
+          cancelled: 'bg-gray-200 text-black dark:bg-gray-800 dark:text-white',
+          error: 'bg-gray-200 text-black dark:bg-gray-800 dark:text-white'
+        };
+        ui.status.className = `status-pill ${statusTone[state] || statusTone.preparing} ${state === 'uploading' || state === 'preparing' || state === 'verifying' ? 'status-active' : ''}`;
+        ui.status.innerHTML = '';
+        const dot = document.createElement('span');
+        dot.className = 'status-dot';
+        ui.status.appendChild(dot);
+        const label = document.createElement('span');
+        label.textContent = extraText || tr[currentLang][key] || key || '';
+        label.className = extraText ? '' : 'status-dynamic';
+        if (!extraText) label.dataset.statusKey = key || '';
+        ui.status.appendChild(label);
+        updateOverall();
+    }
+
+    function updateFileProgress(index, loaded, total, speed) {
+        const ui = uploadStates[index];
+        if (!ui) return;
+        ui.loaded = loaded;
+        ui.total = total;
+        const percent = total ? Math.min(100, Math.round((loaded / total) * 100)) : 0;
+        ui.fileProgressFill.style.width = `${percent}%`;
+        ui.filePct.textContent = `${percent}%`;
+        const speedText = speed > 0 ? ` • ${humanFileSize(speed)}/s` : '';
+        ui.fileInfo.textContent = formatText('msg-bytes', { l: humanFileSize(loaded), t: humanFileSize(total) }) + speedText;
+        updateOverall();
+    }
+
+    function updateOverall() {
+        if (!overallProgressWrap.classList.contains('hidden')) {
+            const totalBytes = uploadStates.reduce((sum, item) => sum + item.total, 0);
+            const loadedBytes = uploadStates.reduce((sum, item) => sum + Math.min(item.loaded, item.total || item.loaded), 0);
+            const overallPercent = totalBytes ? Math.min(100, Math.round((loadedBytes / totalBytes) * 100)) : 0;
+            const counts = uploadStates.reduce((acc, item) => {
+                if (item.state === 'success') acc.success++;
+                else if (item.state === 'error') acc.failed++;
+                else if (item.state === 'cancelled') acc.cancelled++;
+                else acc.active++;
+                return acc;
+            }, { success: 0, failed: 0, cancelled: 0, active: 0 });
+            overallProgressFill.style.width = `${overallPercent}%`;
+            overallPct.textContent = `${overallPercent}%`;
+            overallStatusText.textContent = counts.active > 0 ? formatText('msg-running', { a: counts.active }) : counts.success === uploadStates.length ? tr[currentLang]['msg-final-ok'].replace('{s}', counts.success) : formatText('msg-summary', { s: counts.success, f: counts.failed, a: counts.cancelled });
+            overallInfo.textContent = formatText('msg-bytes', { l: humanFileSize(loadedBytes), t: humanFileSize(totalBytes) });
+            overallCounts.textContent = `${counts.success} ✓ · ${counts.failed} ! · ${counts.cancelled} ×`;
+        }
+    }
+
+    function createUploadCard(file, index) {
+        const block = document.createElement('div');
+        block.className = 'p-5 bg-white dark:bg-[#0a0a0a] border border-gray-200 dark:border-gray-800 rounded-3xl w-full transition-colors';
+
+        const top = document.createElement('div');
+        top.className = 'flex items-start justify-between gap-3 w-full min-w-0';
+
+        const titleWrap = document.createElement('div');
+        titleWrap.className = 'flex-1 min-w-0 overflow-hidden';
+
+        const title = document.createElement('div');
+        title.className = 'font-bold text-sm sm:text-base text-black dark:text-white file-name';
+        title.textContent = getUIDisplayName(file.name);
+
+        const meta = document.createElement('div');
+        meta.className = 'text-xs font-medium text-gray-500 mt-1 pointer-events-none';
+        meta.textContent = `${humanFileSize(file.size)} • ${file.type || 'application/octet-stream'}`;
+
+        titleWrap.appendChild(title);
+        titleWrap.appendChild(meta);
+
+        const topRight = document.createElement('div');
+        topRight.className = 'flex items-center gap-2 flex-shrink-0';
+
+        const status = document.createElement('div');
+        status.className = 'status-pill bg-gray-100 text-black dark:bg-[#161616] dark:text-white';
+
+        const cancelBtn = document.createElement('button');
+        cancelBtn.className = 'text-xs font-bold text-black dark:text-white px-3 py-2 rounded-xl bg-gray-100 dark:bg-[#111111] hover:bg-gray-200 dark:hover:bg-gray-800 hidden file-cancel transition-colors btn-cancel-dynamic';
+        cancelBtn.textContent = tr[currentLang]['btn-cancel'];
+        cancelBtn.onclick = () => cancelSingleFile(index);
+
+        topRight.appendChild(status);
+        topRight.appendChild(cancelBtn);
+        top.appendChild(titleWrap);
+        top.appendChild(topRight);
+
+        const progressWrap = document.createElement('div');
+        progressWrap.className = 'mt-4 pointer-events-none';
+
+        const progressTrack = document.createElement('div');
+        progressTrack.className = 'w-full bg-gray-200 dark:bg-gray-800 rounded-full h-2 overflow-hidden';
+
+        const progressFill = document.createElement('div');
+        progressFill.className = 'file-progress h-2 rounded-full transition-all bg-black dark:bg-white';
+        progressFill.style.width = '0%';
+
+        progressTrack.appendChild(progressFill);
+
+        const progressMeta = document.createElement('div');
+        progressMeta.className = 'flex justify-between items-center gap-3 mt-3 text-sm font-medium';
+
+        const pct = document.createElement('div');
+        pct.className = 'file-pct font-mono text-black dark:text-white';
+        pct.textContent = '0%';
+
+        const info = document.createElement('div');
+        info.className = 'file-info text-gray-500 text-right truncate';
+        info.textContent = formatText('msg-bytes', { l: '0 B', t: humanFileSize(file.size) });
+
+        progressMeta.appendChild(pct);
+        progressMeta.appendChild(info);
+        progressWrap.appendChild(progressTrack);
+        progressWrap.appendChild(progressMeta);
+
+        const result = document.createElement('div');
+        result.className = 'mt-4 file-result w-full min-w-0 empty:hidden';
+
+        block.appendChild(top);
+        block.appendChild(progressWrap);
+        block.appendChild(result);
+        previewAll.appendChild(block);
+
+        return {
+          block,
+          status,
+          cancelBtn,
+          fileProgressFill: progressFill,
+          filePct: pct,
+          fileInfo: info,
+          fileResult: result,
+          loaded: 0,
+          total: file.size,
+          state: 'preparing',
+          statusKey: 'msg-preparing'
+        };
+    }
+
+    function parseJsonResponse(text) {
+        try {
+            return JSON.parse(text || '{}');
+        } catch (e) {
+            return {};
+        }
+    }
+
+    function extractServerError(data, fallback) {
+        if (!data || typeof data !== 'object') return fallback;
+        return data.error || data.message || data.detail || data.reason || fallback;
+    }
+
+    function makeServerError(data, fallbackCode = 'ERR_SERVER') {
+        const error = new Error(extractServerError(data, fallbackCode));
+        error.code = fallbackCode;
+        error.serverData = data;
+        return error;
+    }
+
+    function requestJson(method, endpoint, body, index) {
+        return new Promise((resolve, reject) => {
+            const xhr = new XMLHttpRequest();
+            requests.set(index, { ...(requests.get(index) || {}), [endpoint]: xhr });
+            xhr.open(method, endpoint, true);
+            xhr.setRequestHeader('Content-Type', 'application/json');
+            xhr.setRequestHeader('Accept', 'application/json');
+            xhr.timeout = 120000;
+
+            xhr.onload = () => {
+                const current = requests.get(index) || {};
+                Object.keys(current).forEach(key => {
+                    if (current[key] === xhr) delete current[key];
+                });
+                requests.set(index, current);
+
+                const data = parseJsonResponse(xhr.responseText);
+                if (xhr.status >= 200 && xhr.status < 300) {
+                    resolve(data);
+                } else {
+                    reject(makeServerError(data));
+                }
+            };
+
+            xhr.onerror = () => {
+                const current = requests.get(index) || {};
+                Object.keys(current).forEach(key => {
+                    if (current[key] === xhr) delete current[key];
+                });
+                requests.set(index, current);
+                reject(Object.assign(new Error('ERR_NETWORK'), { code: 'ERR_NETWORK' }));
+            };
+
+            xhr.ontimeout = () => {
+                const current = requests.get(index) || {};
+                Object.keys(current).forEach(key => {
+                    if (current[key] === xhr) delete current[key];
+                });
+                requests.set(index, current);
+                reject(Object.assign(new Error('ERR_NETWORK'), { code: 'ERR_NETWORK' }));
+            };
+
+            xhr.onabort = () => {
+                const current = requests.get(index) || {};
+                Object.keys(current).forEach(key => {
+                    if (current[key] === xhr) delete current[key];
+                });
+                requests.set(index, current);
+                const error = new Error('ERR_ABORT');
+                error.isAbort = true;
+                reject(error);
+            };
+
+            try {
+                xhr.send(JSON.stringify(body));
+            } catch (err) {
+                reject(Object.assign(new Error('ERR_GENERIC'), { code: 'ERR_GENERIC' }));
+            }
+        });
+    }
+
+    function getHeaderValue(headers, names) {
+        if (!headers || typeof headers !== 'object') return '';
+        const keys = Object.keys(headers);
+        for (const wanted of names) {
+            const lower = wanted.toLowerCase();
+            const key = keys.find(item => item.toLowerCase() === lower);
+            if (key && headers[key] != null) return String(headers[key]);
+        }
+        return '';
+    }
+
+    function normalizeHeaderEntries(headers) {
+        if (!headers || typeof headers !== 'object') return [];
+        const forbidden = new Set(['accept', 'accept-charset', 'accept-encoding', 'access-control-request-headers', 'access-control-request-method', 'connection', 'content-length', 'cookie', 'cookie2', 'date', 'dnt', 'expect', 'host', 'origin', 'referer', 'sec-fetch-dest', 'sec-fetch-mode', 'sec-fetch-site', 'te', 'trailer', 'transfer-encoding', 'upgrade', 'user-agent', 'via']);
+        return Object.entries(headers).filter(([key, value]) => value != null && !forbidden.has(String(key).toLowerCase()));
+    }
+
+    function putToR2(uploadUrl, headers, file, index, onProgress) {
+        return new Promise((resolve, reject) => {
+            const xhr = new XMLHttpRequest();
+            const current = requests.get(index) || {};
+            current.upload = xhr;
+            requests.set(index, current);
+            xhr.open('PUT', uploadUrl, true);
+            xhr.timeout = 0;
+
+                normalizeHeaderEntries(headers).forEach(([key, value]) => {
+                try {
+                    xhr.setRequestHeader(key, String(value));
+                } catch (e) {}
+            });
+
+            const contentTypeProvided = getHeaderValue(headers, ['Content-Type', 'content-type']);
+            if (!contentTypeProvided && file.type) {
+                try {
+                    xhr.setRequestHeader('Content-Type', file.type);
+                } catch (e) {}
+            }
+
+            const startTime = Date.now();
+            xhr.upload.onprogress = (event) => {
+                if (!event.lengthComputable) return;
+                const elapsed = Math.max((Date.now() - startTime) / 1000, 0.001);
+                const speed = event.loaded / elapsed;
+                onProgress(event.loaded, event.total, speed);
+            };
+
+            xhr.onload = () => {
+                const active = requests.get(index) || {};
+                if (active.upload === xhr) delete active.upload;
+                requests.set(index, active);
+                if (xhr.status >= 200 && xhr.status < 300) {
+                    resolve();
+                } else {
+                    const error = new Error(`R2_${xhr.status}`);
+                    error.code = 'ERR_R2';
+                    error.status = xhr.status;
+                    reject(error);
+                }
+            };
+
+            xhr.onerror = () => {
+                const active = requests.get(index) || {};
+                if (active.upload === xhr) delete active.upload;
+                requests.set(index, active);
+                const error = new Error('ERR_NETWORK');
+                error.code = 'ERR_NETWORK';
+                reject(error);
+            };
+
+            xhr.onabort = () => {
+                const active = requests.get(index) || {};
+                if (active.upload === xhr) delete active.upload;
+                requests.set(index, active);
+                const error = new Error('ERR_ABORT');
+                error.isAbort = true;
+                reject(error);
+            };
+
+            try {
+                xhr.send(file);
+            } catch (err) {
+                reject(Object.assign(new Error('ERR_R2'), { code: 'ERR_R2' }));
+            }
+        });
+    }
+
+    function extractUploadPreparation(data) {
+        const uploadUrl = data.uploadUrl || '';
+        const uploadHeaders = data.uploadHeaders || {};
+        const tfid = data.TFID || '';
+        return { uploadUrl, uploadHeaders, tfid };
+    }
+
+    function extractCompletedUrls(data) {
+        const urls = [];
+        if (Array.isArray(data?.urls)) {
+            data.urls.forEach(url => {
+                if (typeof url === 'string' && url) urls.push(url);
+                else if (url && typeof url === 'object') {
+                    const value = url.url || url.href || url.location;
+                    if (value) urls.push(String(value));
+                }
+            });
+        }
+        ['url', 'fileUrl', 'downloadUrl', 'location', 'href', 'publicUrl'].forEach(key => {
+            if (typeof data?.[key] === 'string' && data[key] && !urls.includes(data[key])) urls.push(data[key]);
+        });
+        return urls;
+    }
+
+    function normalizeUrl(url) {
+        try {
+            return new URL(url, window.location.href).href;
+        } catch (e) {
+            return '';
+        }
+    }
+
+    async function prepareUpload(file, index) {
+        setFileState(index, 'preparing', 'msg-preparing');
+        const data = await requestJson('POST', '/upload', {
+            filename: file.name,
+            size: file.size,
+            contentType: file.type || 'application/octet-stream'
+        }, index);
+        const prepared = extractUploadPreparation(data);
+        if (!prepared.uploadUrl || !prepared.tfid) {
+            throw makeServerError(data, 'ERR_SERVER');
+        }
+        return prepared;
+    }
+
+    async function completeUpload(tfid, file, index) {
+        setFileState(index, 'verifying', 'msg-verifying');
+        return requestJson('POST', '/upload/complete', { TFID: tfid }, index).then(data => {
+            const urls = extractCompletedUrls(data);
+            if (urls.length === 0) {
+                throw makeServerError(data, 'ERR_SERVER');
+            }
+            return urls;
+        });
+    }
+
+    function renderUrls(ui, urls) {
+        ui.fileResult.innerHTML = '';
+        const title = document.createElement('div');
+        title.className = 'text-xs font-extrabold text-gray-500 uppercase tracking-wider mb-2';
+        title.textContent = tr[currentLang]['msg-completed'];
+        ui.fileResult.appendChild(title);
+
+        urls.forEach((url, urlIndex) => {
+            const card = document.createElement('div');
+            card.className = 'url-card mb-3 p-4 bg-gray-50 dark:bg-[#111111] border border-gray-200 dark:border-gray-800 rounded-2xl w-full';
+
+            const top = document.createElement('div');
+            top.className = 'flex items-center justify-between gap-3 mb-2';
+
+            const label = document.createElement('div');
+            label.className = 'text-xs font-extrabold text-gray-500 uppercase tracking-wider';
+            label.textContent = formatText('url-label', { n: urlIndex + 1 });
+
+            const actions = document.createElement('div');
+            actions.className = 'flex items-center gap-2 flex-shrink-0';
+
+            const normalized = normalizeUrl(url);
+            if (normalized) {
+                const openBtn = document.createElement('a');
+                openBtn.href = normalized;
+                openBtn.target = '_blank';
+                openBtn.rel = 'noopener noreferrer';
+                openBtn.className = 'text-xs font-extrabold px-3 py-2 rounded-xl bg-white dark:bg-black border border-gray-200 dark:border-gray-700 text-black dark:text-white hover:bg-gray-100 dark:hover:bg-gray-900';
+                openBtn.textContent = tr[currentLang]['open'];
+                actions.appendChild(openBtn);
+            }
+
+            const copyBtn = document.createElement('button');
+            copyBtn.type = 'button';
+            copyBtn.className = 'text-xs font-extrabold px-3 py-2 rounded-xl bg-black dark:bg-white text-white dark:text-black hover:bg-gray-800 dark:hover:bg-gray-200';
+            copyBtn.textContent = tr[currentLang]['copy'];
+            copyBtn.onclick = async () => {
+                try {
+                    await navigator.clipboard.writeText(url);
+                    showToast(tr[currentLang]['msg-copy-ok']);
+                } catch (e) {
+                    showToast(tr[currentLang]['msg-copy-err']);
+                }
+            };
+            actions.appendChild(copyBtn);
+
+            top.appendChild(label);
+            top.appendChild(actions);
+
+            const urlText = document.createElement('div');
+            urlText.className = 'selectable text-sm font-semibold text-black dark:text-white break-all leading-6';
+            urlText.textContent = url;
+            urlText.onclick = async () => {
+                try {
+                    await navigator.clipboard.writeText(url);
+                    showToast(tr[currentLang]['msg-copy-ok']);
+                } catch (e) {
+                    showToast(tr[currentLang]['msg-copy-err']);
+                }
+            };
+
+            card.appendChild(top);
+            card.appendChild(urlText);
+            ui.fileResult.appendChild(card);
+        });
+    }
+
+    function renderPreview(ui, file, url) {
+        const type = (file.type || '').toLowerCase();
+        if (type.startsWith('image/')) {
+            const wrapper = document.createElement('div');
+            wrapper.className = 'mt-4 preview-frame rounded-2xl border border-gray-200 dark:border-gray-800 overflow-hidden';
+            const img = document.createElement('img');
+            img.src = url;
+            img.alt = file.name;
+            img.className = 'mx-auto max-h-72 object-contain w-full pointer-events-none';
+            wrapper.appendChild(img);
+            ui.fileResult.appendChild(wrapper);
+        } else if (type.startsWith('video/')) {
+            const video = document.createElement('video');
+            video.src = url;
+            video.controls = true;
+            video.preload = 'metadata';
+            video.className = 'mt-4 mx-auto rounded-2xl border border-gray-200 dark:border-gray-800 max-h-72 w-full bg-black';
+            ui.fileResult.appendChild(video);
+        } else if (type.startsWith('audio/')) {
+            const audio = document.createElement('audio');
+            audio.src = url;
+            audio.controls = true;
+            audio.className = 'mt-4 w-full';
+            ui.fileResult.appendChild(audio);
+        }
+    }
+
+    function cancelSingleFile(index) {
+        const current = requests.get(index);
+        if (!current) return;
+        let aborted = false;
+        ['prepare', 'upload', 'complete', '/upload', '/upload/complete'].forEach(key => {
+            const xhr = current[key];
+            if (xhr) {
+                try {
+                    xhr.abort();
+                    aborted = true;
+                } catch (e) {}
+            }
+        });
+        if (aborted) {
+            setFileState(index, 'cancelled', 'msg-cancelled');
+            const ui = uploadStates[index];
+            if (ui) {
+                ui.cancelBtn.classList.add('hidden');
+                ui.fileInfo.textContent = tr[currentLang]['msg-cancelled'];
+            }
+        }
+    }
+
+    async function uploadSingleFile(file, index, runId) {
+        const ui = uploadStates[index];
+        try {
+            const prepared = await prepareUpload(file, index);
+            if (runId !== activeUploadRun || ui.state === 'cancelled') {
+                throw Object.assign(new Error('ERR_ABORT'), { isAbort: true });
+            }
+
+            ui.cancelBtn.classList.remove('hidden');
+            setFileState(index, 'uploading', 'msg-uploading');
+            updateFileProgress(index, 0, file.size, 0);
+
+            await putToR2(prepared.uploadUrl, prepared.uploadHeaders, file, index, (loaded, total, speed) => {
+                if (ui.state === 'cancelled') return;
+                updateFileProgress(index, loaded, total || file.size, speed);
+            });
+
+            if (ui.state === 'cancelled') {
+                throw Object.assign(new Error('ERR_ABORT'), { isAbort: true });
+            }
+
+            ui.loaded = file.size;
+            updateFileProgress(index, file.size, file.size, 0);
+
+            const urls = await completeUpload(prepared.tfid, file, index);
+            if (ui.state === 'cancelled') {
+                throw Object.assign(new Error('ERR_ABORT'), { isAbort: true });
+            }
+
+            ui.cancelBtn.classList.add('hidden');
+            setFileState(index, 'success', 'msg-completed');
+            ui.fileProgressFill.style.width = '100%';
+            ui.filePct.textContent = '100%';
+            ui.fileInfo.textContent = tr[currentLang]['msg-completed'];
+            renderUrls(ui, urls);
+            renderPreview(ui, file, urls[0]);
+            return { status: 'fulfilled', urls };
+        } catch (err) {
+            const abort = err?.isAbort || err?.name === 'AbortError' || ui.state === 'cancelled';
+            ui.cancelBtn.classList.add('hidden');
+            if (abort) {
+                setFileState(index, 'cancelled', 'msg-cancelled');
+                ui.filePct.textContent = '—';
+                ui.fileInfo.textContent = tr[currentLang]['msg-cancelled'];
+                return { status: 'aborted' };
+            }
+
+            let message = tr[currentLang]['msg-err-generic'];
+            if (err?.code === 'ERR_NETWORK') message = tr[currentLang]['msg-err-network'];
+            else if (err?.code === 'ERR_R2') message = tr[currentLang]['msg-err-r2'];
+            else if (err?.code === 'ERR_SERVER') message = extractServerError(err.serverData, '') || tr[currentLang]['msg-err-server'];
+            else if (err?.message && err.message !== 'ERR_GENERIC') message = err.message;
+
+            setFileState(index, 'error', 'msg-err-generic', message);
+            ui.filePct.textContent = '—';
+            ui.fileInfo.textContent = message;
+
+            const errorBox = document.createElement('div');
+            errorBox.className = 'text-sm font-bold text-black dark:text-white mt-3 p-4 bg-gray-100 dark:bg-gray-800 rounded-2xl text-center border border-gray-300 dark:border-gray-700 selectable';
+            errorBox.textContent = message;
+            ui.fileResult.innerHTML = '';
+            ui.fileResult.appendChild(errorBox);
+            return { status: 'rejected', reason: err };
+        } finally {
+            requests.delete(index);
+            updateOverall();
+        }
+    }
+
     fileInput.addEventListener('change', (e) => {
       closeMenu();
       if (hasUploaded) {
         filesArray = [];
         previewAll.innerHTML = '';
         overallProgressWrap.classList.add('hidden');
+        overallProgressFill.style.width = '0%';
+        overallPct.textContent = '0%';
+        overallInfo.textContent = '';
+        overallCounts.textContent = '';
+        overallStatusText.textContent = '';
         hasUploaded = false;
       }
       const list = Array.from(e.target.files || []);
+      if (!list.length) return;
       filesArray = filesArray.concat(list);
+      fileInput.value = '';
       renderSelectedList();
     });
 
@@ -640,282 +1342,86 @@
         return;
       }
       if (uploading) return;
-      
+
+      const filesToUpload = [...filesArray];
+      activeUploadRun += 1;
+      const runId = activeUploadRun;
       uploading = true;
       hasUploaded = false;
-      
+
       uploadBtn.disabled = true;
       uploadBtn.classList.add('opacity-50', 'cursor-not-allowed');
       cancelAllBtn.classList.remove('hidden');
-      
       fileInput.disabled = true;
       dropzoneLabel.classList.add('pointer-events-none', 'opacity-50');
-      
-      showToast(t['msg-start']);
-
-      selectedList.innerHTML = ''; 
+      selectionMeta.classList.add('hidden');
+      selectedList.innerHTML = '';
       overallProgressWrap.classList.remove('hidden');
       overallInfo.textContent = '';
+      overallCounts.textContent = '';
       previewAll.innerHTML = '';
-      xhrs.clear();
+      requests.clear();
 
-      const totalBytes = filesArray.reduce((s,f) => s + f.size, 0);
-      const loadedBytes = new Array(filesArray.length).fill(0);
+      uploadStates = filesToUpload.map((file, index) => createUploadCard(file, index));
+      updateOverall();
+      showToast(formatText('msg-start'));
 
-      const blocks = filesArray.map((file, i) => {
-        const block = document.createElement('div');
-        block.className = 'p-5 bg-white dark:bg-[#0a0a0a] border border-gray-200 dark:border-gray-800 rounded-3xl w-full transition-colors';
-        block.innerHTML = `
-          <div class="flex items-start justify-between gap-3 w-full min-w-0">
-            <div class="flex-1 min-w-0 overflow-hidden">
-              <div class="font-bold text-sm sm:text-base text-black dark:text-white file-name">${escapeHtml(getUIDisplayName(file.name))}</div>
-              <div class="text-xs font-medium text-gray-500 mt-1 pointer-events-none">${humanFileSize(file.size)}</div>
-            </div>
-            <div class="flex-shrink-0">
-              <button class="text-xs font-bold text-black dark:text-white px-4 py-2 rounded-xl bg-gray-100 dark:bg-[#111111] hover:bg-gray-200 dark:hover:bg-gray-800 hidden file-cancel transition-colors btn-cancel-dynamic">${t['btn-cancel']}</button>
-            </div>
-          </div>
-          <div class="mt-4 pointer-events-none">
-            <div class="w-full bg-gray-200 dark:bg-gray-800 rounded-full h-2 overflow-hidden">
-              <div class="file-progress h-2 rounded-full transition-all bg-black dark:bg-white" style="width:0%"></div>
-            </div>
-            <div class="flex justify-between items-center mt-3 text-sm font-medium">
-              <div class="file-pct font-mono text-black dark:text-white">0%</div>
-              <div class="file-info text-gray-500"></div>
-            </div>
-          </div>
-          <div class="mt-4 file-result w-full min-w-0 empty:hidden"></div>
-        `;
-        previewAll.appendChild(block);
-        return {
-          block,
-          fileProgressFill: block.querySelector('.file-progress'),
-          filePct: block.querySelector('.file-pct'),
-          fileInfo: block.querySelector('.file-info'),
-          fileCancelBtn: block.querySelector('.file-cancel'),
-          fileResult: block.querySelector('.file-result')
-        };
-      });
-
-      function updateOverall() {
-        const sum = loadedBytes.reduce((a,b) => a + b, 0);
-        const overallPercent = totalBytes ? Math.round((sum / totalBytes) * 100) : 0;
-        overallProgressFill.style.width = overallPercent + '%';
-        overallPct.textContent = overallPercent + '%';
-        overallInfo.textContent = `${humanFileSize(sum)} / ${humanFileSize(totalBytes)}`;
-      }
-
-      const uploadPromises = filesArray.map((file, i) => {
-        const ui = blocks[i];
-        return uploadSingleFile(file, i, {
-          onProgress: (loaded, total, speed, secsLeft) => {
-            const percent = total ? Math.round((loaded/total)*100) : 0;
-            ui.fileProgressFill.style.width = percent + '%';
-            ui.filePct.textContent = percent + '%';
-            ui.fileInfo.textContent = `${humanFileSize(loaded)} / ${humanFileSize(total)}`;
-            loadedBytes[i] = loaded;
-            updateOverall();
-          },
-          onXhrCreated: (xhr) => {
-            xhrs.set(i, xhr);
-            ui.fileCancelBtn.classList.remove('hidden');
-            ui.fileCancelBtn.onclick = () => {
-              try { xhr.abort(); } catch(e) {}
-            };
-          }
-        }).then(url => {
-          const tLive = tr[currentLang];
-          loadedBytes[i] = file.size;
-          updateOverall();
-          ui.fileProgressFill.style.width = '100%';
-          ui.filePct.textContent = '100%';
-          ui.fileInfo.textContent = tLive['msg-completed'];
-          ui.fileInfo.classList.add('msg-completed-dynamic');
-          ui.fileCancelBtn.classList.add('hidden');
-
-          const match = url.match(/^(.*\/([^\/]+))\/([^\/]+)$/);
-          let url1 = url;
-          let url2 = url;
-          let url3 = url;
-          let url4 = url;
-          
-          if (match) {
-              url2 = match[1] + '/';
-              url4 = match[2];
-              url3 = url2 + tLive['url-dl'];
-          }
-          
-          const urlsToShow = [url1, url2, url3, url4];
-
-          urlsToShow.forEach(u => {
-              const div = document.createElement('div');
-              div.className = 'mt-3 p-4 bg-gray-50 dark:bg-[#111111] border border-gray-200 dark:border-gray-800 rounded-2xl w-full flex items-center justify-between gap-2 file-url-container';
-              const urlDiv = document.createElement('div');
-              urlDiv.className = 'text-black dark:text-white text-sm font-bold flex-1 cursor-pointer transition-opacity hover:opacity-75 overflow-hidden text-ellipsis whitespace-nowrap';
-              urlDiv.textContent = u;
-              urlDiv.onclick = () => {
-                navigator.clipboard.writeText(u).then(() => {
-                  showToast(tLive['msg-copy-ok']);
-                }).catch(() => {
-                  showToast(tLive['msg-copy-err']);
-                });
-              };
-              div.appendChild(urlDiv);
-              ui.fileResult.appendChild(div);
-          });
-
-          const type = (file.type || '').toLowerCase();
-          if (type.startsWith('image/')) {
-            const img = document.createElement('img');
-            img.src = url;
-            img.className = 'mt-4 mx-auto rounded-2xl border border-gray-200 dark:border-gray-800 max-h-64 object-contain w-full bg-white dark:bg-black pointer-events-none';
-            ui.fileResult.appendChild(img);
-          } else if (type.startsWith('video/') || type.startsWith('audio/')) {
-            const vid = document.createElement('video');
-            vid.src = url;
-            vid.controls = true;
-            vid.className = 'mt-4 mx-auto rounded-2xl border border-gray-200 dark:border-gray-800 max-h-64 w-full bg-black';
-            ui.fileResult.appendChild(vid);
-          }
-          return { status: 'fulfilled', url };
-        }).catch(err => {
-          const tLive = tr[currentLang];
-          ui.fileCancelBtn.classList.add('hidden');
-          ui.fileInfo.textContent = '';
-          ui.filePct.textContent = '—';
-          ui.fileProgressFill.style.width = '0%';
-          
-          const errDiv = document.createElement('div');
-          errDiv.className = 'text-sm font-bold text-black dark:text-white mt-3 p-3 bg-gray-200 dark:bg-gray-800 rounded-2xl text-center border border-gray-300 dark:border-gray-700 selectable';
-
-          if (err && err.isAbort) {
-            errDiv.textContent = tLive['msg-err-user'];
-            errDiv.classList.add('msg-err-user-dynamic');
-            ui.fileResult.appendChild(errDiv);
-            return { status: 'aborted' };
-          } else {
-            let errorKey = 'msg-err-generic';
-            let customMsg = '';
-            if (err && err.message) {
-                if (err.message === 'ERR_NETWORK') errorKey = 'msg-err-network';
-                else if (err.message === 'ERR_SERVER') errorKey = 'msg-err-server';
-                else if (err.message.startsWith('SERVER_ERROR:')) {
-                    errorKey = null;
-                    customMsg = err.message.substring(13);
-                }
-            }
-            
-            if (customMsg) {
-                errDiv.textContent = customMsg;
-            } else {
-                errDiv.textContent = tLive[errorKey];
-                if(errorKey === 'msg-err-network') errDiv.classList.add('msg-err-net-dynamic');
-                else if(errorKey === 'msg-err-server') errDiv.classList.add('msg-err-srv-dynamic');
-                else errDiv.classList.add('msg-err-gen-dynamic');
-            }
-
-            ui.fileResult.appendChild(errDiv);
-            return { status: 'rejected', reason: err };
-          }
-        });
-      });
-
+      const uploadPromises = filesToUpload.map((file, index) => uploadSingleFile(file, index, runId));
       const results = await Promise.allSettled(uploadPromises);
 
       uploading = false;
       hasUploaded = true;
-      
+
       uploadBtn.disabled = false;
       uploadBtn.classList.remove('opacity-50', 'cursor-not-allowed');
       cancelAllBtn.classList.add('hidden');
-      
       fileInput.disabled = false;
       dropzoneLabel.classList.remove('pointer-events-none', 'opacity-50');
+      requests.clear();
+      filesArray = [];
+      fileInput.value = '';
 
-      const succeeded = results.filter(r => r.status === 'fulfilled' && r.value && r.value.status === 'fulfilled').length;
-      const aborted = results.filter(r => r.status === 'fulfilled' && r.value && r.value.status === 'aborted').length;
-      const failed = results.filter(r => r.status === 'fulfilled' && r.value && r.value.status === 'rejected').length;
-      overallInfo.textContent = `${tr[currentLang]['msg-completed']} : ${humanFileSize(loadedBytes.reduce((a,b)=>a+b,0))}`;
-      
-      const finalT = tr[currentLang];
+      const normalizedResults = results.map(result => result.status === 'fulfilled' ? result.value : { status: 'rejected', reason: result.reason });
+      const succeeded = normalizedResults.filter(result => result.status === 'fulfilled').length;
+      const aborted = normalizedResults.filter(result => result.status === 'aborted').length;
+      const failed = normalizedResults.filter(result => result.status === 'rejected').length;
+
+      const finalLoaded = uploadStates.reduce((sum, item) => sum + Math.min(item.loaded, item.total), 0);
+      const finalTotal = filesToUpload.reduce((sum, file) => sum + file.size, 0);
+      const finalPercent = finalTotal ? Math.round((finalLoaded / finalTotal) * 100) : 0;
+      overallProgressFill.style.width = `${Math.min(100, finalPercent)}%`;
+      overallPct.textContent = `${Math.min(100, finalPercent)}%`;
+      overallInfo.textContent = `${humanFileSize(uploadStates.reduce((sum, item) => sum + Math.min(item.loaded, item.total), 0))} / ${humanFileSize(filesToUpload.reduce((sum, file) => sum + file.size, 0))}`;
+      overallCounts.textContent = `${succeeded} ✓ · ${failed} ! · ${aborted} ×`;
+      overallStatusText.textContent = failed > 0 ? formatText('msg-summary', { s: succeeded, f: failed, a: aborted }) : formatText('msg-final-ok', { s: succeeded });
+
       if (failed > 0) {
-        let txt = finalT['msg-final-err'].replace('{s}', succeeded).replace('{f}', failed).replace('{a}', aborted);
-        showToast(txt);
+        showToast(formatText('msg-final-err', { s: succeeded, f: failed, a: aborted }));
       } else {
-        let txt = finalT['msg-final-ok'].replace('{s}', succeeded);
-        showToast(txt);
+        showToast(formatText('msg-final-ok', { s: succeeded }));
       }
     });
 
     cancelAllBtn.addEventListener('click', () => {
-      for (const xhr of xhrs.values()) {
-        try { xhr.abort(); } catch(e) {}
+      activeUploadRun += 1;
+      for (const [index, current] of requests.entries()) {
+        ['prepare', 'upload', 'complete', '/upload', '/upload/complete'].forEach(key => {
+          const xhr = current[key];
+          if (xhr) {
+            try { xhr.abort(); } catch (e) {}
+          }
+        });
+        const ui = uploadStates[index];
+        if (ui && !['success', 'error', 'cancelled'].includes(ui.state)) {
+            setFileState(index, 'cancelled', 'msg-cancelled');
+            ui.cancelBtn.classList.add('hidden');
+            ui.filePct.textContent = '—';
+            ui.fileInfo.textContent = tr[currentLang]['msg-cancelled'];
+        }
       }
-      xhrs.clear();
+      requests.clear();
       showToast(tr[currentLang]['msg-cancel-all']);
     });
-
-    function uploadSingleFile(file, index, { onProgress = ()=>{}, onXhrCreated = ()=>{} } = {}) {
-      return new Promise((resolve, reject) => {
-        const endpoint = `/upload`;
-        const formData = new FormData();
-        formData.append('file', file);
-
-        const xhr = new XMLHttpRequest();
-        let startTime = Date.now();
-        xhr.open('POST', endpoint);
-
-        xhr.upload.onprogress = (e) => {
-          if (e.lengthComputable) {
-            const elapsed = (Date.now() - startTime) / 1000;
-            const speed = e.loaded / Math.max(elapsed, 0.001);
-            const remainingBytes = e.total - e.loaded;
-            const secsLeft = Math.round(remainingBytes / Math.max(speed, 1));
-            onProgress(e.loaded, e.total, speed, secsLeft);
-          }
-        };
-
-        xhr.onload = () => {
-          xhrs.delete(index);
-          let data = {};
-          try {
-            data = JSON.parse(xhr.responseText || '{}');
-          } catch (e) {}
-
-          if (xhr.status >= 200 && xhr.status < 300) {
-            const url = data.url || data.fileUrl || data.path || data.location || '';
-            if (url) {
-              resolve(url);
-            } else {
-              reject(new Error('ERR_SERVER'));
-            }
-          } else {
-            const errorMsg = data.error ? `SERVER_ERROR:${data.error}` : 'ERR_SERVER';
-            reject(new Error(errorMsg));
-          }
-        };
-
-        xhr.onerror = () => {
-          xhrs.delete(index);
-          reject(new Error('ERR_NETWORK'));
-        };
-
-        xhr.onabort = () => {
-          xhrs.delete(index);
-          const err = new Error('ERR_ABORT');
-          err.isAbort = true;
-          reject(err);
-        };
-
-        onXhrCreated(xhr);
-
-        try {
-          xhr.send(formData);
-        } catch (err) {
-          reject(new Error('ERR_GENERIC'));
-        }
-      });
-    }
 
     applyTranslations();
 
