@@ -1364,7 +1364,23 @@ async function handleUploadPresign(req, res) {
             });
 
             console.log(`[UPLOAD] PRESIGN_SIGN_START token=${token}`);
-            const uploadUrl = await getSignedUrl(s3, command, { expiresIn: UPLOAD_URL_TTL_SECONDS });
+            const uploadUrl = await getSignedUrl(s3, command, {
+                expiresIn: UPLOAD_URL_TTL_SECONDS,
+                signableHeaders: new Set(['content-type']),
+                unhoistableHeaders: new Set([
+                    'x-amz-meta-originalname',
+                    'x-amz-meta-safeoriginal',
+                    'x-amz-meta-token'
+                ])
+            });
+            const signedHeaders = (() => {
+                try {
+                    return new URL(uploadUrl).searchParams.get('X-Amz-SignedHeaders') || '';
+                } catch (error) {
+                    return '';
+                }
+            })();
+            console.log(`[UPLOAD] PRESIGNED_SIGNED_HEADERS token=${token} headers=${JSON.stringify(signedHeaders)}`);
             const origin = (process.env.BASE_URL || 'https://bref.adamdh7.org').replace(/\/+$/, '');
             const sharePath = `/TF-${token}/${encodeURIComponent(safeOriginal)}`;
 
