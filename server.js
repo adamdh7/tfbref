@@ -3,7 +3,7 @@ const path = require('path');
 const fs = require('fs');
 const cors = require('cors');
 const compression = require('compression');
-const { S3Client, DeleteObjectCommand, HeadObjectCommand, GetObjectCommand, PutObjectCommand, ListObjectsV2Command, CopyObjectCommand } = require('@aws-sdk/client-s3');
+const { S3Client, DeleteObjectCommand, DeleteObjectsCommand, HeadObjectCommand, GetObjectCommand, ListObjectsV2Command, PutObjectCommand } = require('@aws-sdk/client-s3');
 const { getSignedUrl } = require('@aws-sdk/s3-request-presigner');
 const mongoose = require('mongoose');
 
@@ -16,28 +16,14 @@ process.on('unhandledRejection', (reason) => {
 });
 
 const PORT = process.env.PORT || 10000;
-const MAX_FILE_SIZE = 7 * 1024 * 1024 * 1024;
-const R2_RECONCILE_INTERVAL_MS = Math.max(60 * 1000, Number(process.env.R2_RECONCILE_INTERVAL_MS || 17 * 60 * 1000));
-const LIMIT_R2_BYTES = 7 * 1024 * 1024 * 1024;
-const DOWNLOAD_URL_TTL_SECONDS = Math.max(60, Number(process.env.DOWNLOAD_URL_TTL || 3600));
-const UPLOAD_SIGNED_TTL_SECONDS = Math.min(3600, Math.max(60, Number(process.env.UPLOAD_SIGNED_TTL || 1800)));
-const UPLOAD_RESERVATION_TTL_MS = Math.max(5 * 60 * 1000, Number(process.env.UPLOAD_RESERVATION_TTL_MS || 30 * 60 * 1000));
-const PENDING_PREFIX = 'pending/';
-const STATUS_KEY = 'global';
-
-let uploadStateLock = Promise.resolve();
-
-async function withUploadStateLock(task) {
-    const previous = uploadStateLock;
-    let release;
-    uploadStateLock = new Promise(resolve => { release = resolve; });
-    await previous;
-    try {
-        return await task();
-    } finally {
-        release();
-    }
-}
+const MAX_FILE_SIZE = 5 * 1024 * 1024 * 1024 - 5 * 1024 * 1024;
+const MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
+const LIMIT_R2_BYTES = 7516192768;
+const DOWNLOAD_URL_TTL_SECONDS = 3600;
+const UPLOAD_URL_TTL_SECONDS = 3600;
+const PENDING_UPLOAD_TTL_MS = 30 * 60 * 1000;
+const PENDING_CLEANUP_INTERVAL_MS = 5 * 60 * 1000;
+const R2_STATUS_SYNC_INTERVAL_MS = 5 * 60 * 1000;
 
 const R2_BASE_URL = 'https://pub-e2d76735e9dd42f2af664d9e64599ca6.r2.dev';
 const ICON_URL = 'https://adamdh7.org/adamdh7.png';
@@ -53,18 +39,162 @@ const s3 = new S3Client({
     }
 });
 
-mongoose.connect(process.env.MONGO_URI || 'mongodb+srv://adamdh7:Tchengy1@botadamdh7.lo27bbm.mongodb.net/brefs?appName=brefs').catch(() => {});
+mongoose.connect(process.env.MONGO_URI || 'mongodb+srv://adamdh7:Tchengy1@botadamdh7.lo27bbm.mongodb.net/brefs?appName=brefs');
 
 const statusSchema = new mongoose.Schema({
     key: { type: String, unique: true },
     totalSize: { type: Number, default: 0 },
-    reservedSize: { type: Number, default: 0 },
-    activeUploads: { type: Number, default: 0 },
-    reservationExpiresAt: { type: Date, default: null },
-    lastReconcile: { type: Date, default: null }
-}, { versionKey: false, collection: 'status' });
-
+    limitBytes: { type: Number, default: LIMIT_R2_BYTES }
+}, { versionKey: false, collection: 'statuses' });
 const StatusModel = mongoose.model('Status', statusSchema);
+
+const pendingUploadSchema = new mongoose.Schema({
+    _id: { type: String, required: true },
+    expiresAt: { type: Date, required: true }
+}, { versionKey: false, collection: 'upload_pending' });
+const PendingUploadModel = mongoose.model('PendingUpload', pendingUploadSchema);
+
+async function ensureGlobalStatus() {
+    const status = await StatusModel.findOneAndUpdate(
+        { key: 'global' },
+        { $set: { limitBytes: LIMIT_R2_BYTES }, $unset: { lastWipe: 1 }, $setOnInsert: { totalSize: 0, key: 'global' } },
+        { upsert: true, returnDocument: 'after', setDefaultsOnInsert: true }
+    ).lean();
+    return status;
+}
+
+async function listR2Objects() {
+    const objects = [];
+    let continuationToken;
+
+    do {
+        const command = new ListObjectsV2Command({
+            Bucket: R2_BUCKET,
+            ContinuationToken: continuationToken
+        });
+        const response = await s3.send(command);
+        for (const object of response.Contents || []) {
+            if (!object.Key) continue;
+            objects.push({
+                key: String(object.Key),
+                size: Number(object.Size || 0),
+                lastModified: object.LastModified ? new Date(object.LastModified) : null
+            });
+        }
+        continuationToken = response.IsTruncated ? String(response.NextContinuationToken || '') : '';
+    } while (continuationToken);
+
+    return objects;
+}
+
+async function syncStatusFromR2() {
+    const objects = await listR2Objects();
+    const totalSize = objects.reduce((sum, object) => sum + Math.max(0, Number(object.size || 0)), 0);
+    await StatusModel.updateOne(
+        { key: 'global' },
+        { $set: { totalSize, limitBytes: LIMIT_R2_BYTES }, $setOnInsert: { key: 'global' } },
+        { upsert: true }
+    );
+    console.log(`[R2] STATUS_SYNC totalBytes=${totalSize} limitBytes=${LIMIT_R2_BYTES} objects=${objects.length}`);
+    return { totalSize, objects };
+}
+
+async function wipeEntireR2Bucket(reason) {
+    const objects = await listR2Objects();
+    console.log(`[R2] WIPE_START reason=${reason} objects=${objects.length}`);
+
+    for (let index = 0; index < objects.length; index += 1000) {
+        const batch = objects.slice(index, index + 1000);
+        if (!batch.length) continue;
+        const response = await s3.send(new DeleteObjectsCommand({
+            Bucket: R2_BUCKET,
+            Delete: {
+                Objects: batch.map(object => ({ Key: object.key })),
+                Quiet: false
+            }
+        }));
+        const deleted = Array.isArray(response.Deleted) ? response.Deleted.length : 0;
+        const errors = Array.isArray(response.Errors) ? response.Errors.length : 0;
+        console.log(`[R2] WIPE_BATCH index=${Math.floor(index / 1000) + 1} requested=${batch.length} deleted=${deleted} errors=${errors}`);
+        if (errors) console.error(`[R2] WIPE_ERRORS ${JSON.stringify(response.Errors)}`);
+    }
+
+    await PendingUploadModel.deleteMany({});
+    await ensureGlobalStatus();
+    await StatusModel.updateOne({ key: 'global' }, { $set: { totalSize: 0, limitBytes: LIMIT_R2_BYTES } });
+    console.log('[R2] WIPE_DONE totalBytes=0 pending=0');
+}
+
+async function cleanupExpiredPendingUploads() {
+    const now = new Date();
+    const pending = await PendingUploadModel.find({ expiresAt: { $lte: now } }).limit(500).lean();
+    if (!pending.length) return;
+
+    console.log(`[UPLOAD] PENDING_CLEANUP_START count=${pending.length}`);
+    for (const item of pending) {
+        const token = String(item._id || '');
+        if (!token) continue;
+        try {
+            await s3.send(new DeleteObjectCommand({ Bucket: R2_BUCKET, Key: token }));
+            console.log(`[UPLOAD] PENDING_R2_DELETE token=${token} result=ok`);
+        } catch (error) {
+            const code = String(error && (error.name || error.Code || error.code) || '').toLowerCase();
+            if (!code.includes('nosuchkey') && !code.includes('notfound')) {
+                console.error(`[UPLOAD] PENDING_R2_DELETE token=${token} result=error error=${error.message || error}`);
+            } else {
+                console.log(`[UPLOAD] PENDING_R2_DELETE token=${token} result=missing`);
+            }
+        }
+        await PendingUploadModel.deleteOne({ _id: token });
+        console.log(`[UPLOAD] PENDING_REMOVED token=${token}`);
+    }
+
+    await syncStatusFromR2();
+    console.log('[UPLOAD] PENDING_CLEANUP_DONE');
+}
+
+async function cleanupOldR2Objects() {
+    const cutoff = Date.now() - MAX_AGE_MS;
+    const objects = await listR2Objects();
+    let removed = 0;
+
+    for (const object of objects) {
+        if (!object.lastModified || object.lastModified.getTime() >= cutoff) continue;
+        try {
+            await s3.send(new DeleteObjectCommand({ Bucket: R2_BUCKET, Key: object.key }));
+            removed += 1;
+            console.log(`[R2] OLD_OBJECT_DELETE key=${object.key} result=ok`);
+        } catch (error) {
+            console.error(`[R2] OLD_OBJECT_DELETE key=${object.key} result=error error=${error.message || error}`);
+        }
+    }
+
+    if (removed) await syncStatusFromR2();
+}
+
+async function dropLegacyFileCollection() {
+    try {
+        const collections = await mongoose.connection.db.listCollections({ name: 'files' }).toArray();
+        if (collections.length) {
+            await mongoose.connection.db.collection('files').drop();
+            console.log('[MONGO] LEGACY_FILES_COLLECTION_DROPPED');
+        }
+    } catch (error) {
+        console.error(`[MONGO] LEGACY_FILES_COLLECTION_DROP_ERROR error=${error.message || error}`);
+    }
+}
+
+mongoose.connection.once('open', async () => {
+    try {
+        await ensureGlobalStatus();
+        await StatusModel.deleteMany({ key: { $ne: 'global' } });
+        await dropLegacyFileCollection();
+        await syncStatusFromR2();
+        console.log('[MONGO] STORAGE_STATE_READY');
+    } catch (error) {
+        console.error(`[MONGO] STORAGE_STATE_INIT_ERROR error=${error.message || error}`);
+    }
+});
 
 function genToken() {
     const chars = '0123456789';
@@ -1058,26 +1188,19 @@ function sendUnknown(req, res) {
     }
 }
 
-async function getRemoteObjectMeta(token, key = null) {
+async function getRemoteObjectMeta(token) {
     try {
-        const objectKey = key || token;
-        const head = await s3.send(new HeadObjectCommand({ Bucket: R2_BUCKET, Key: objectKey }));
+        const head = await s3.send(new HeadObjectCommand({ Bucket: R2_BUCKET, Key: token }));
         return {
             exists: true,
-            key: objectKey,
             contentType: head.ContentType || null,
-            contentLength: Number(head.ContentLength || 0),
+            contentLength: head.ContentLength || null,
             metadata: head.Metadata || {},
-            lastModified: head.LastModified ? new Date(head.LastModified).toISOString() : null,
-            etag: head.ETag || null
+            lastModified: head.LastModified ? new Date(head.LastModified).toISOString() : null
         };
     } catch (err) {
         return null;
     }
-}
-
-function buildPendingKey(token) {
-    return `${PENDING_PREFIX}${String(token || '').trim()}`;
 }
 
 function safeDecodeURIComponent(value) {
@@ -1088,182 +1211,33 @@ function safeDecodeURIComponent(value) {
     }
 }
 
-function tokenFromTFID(value) {
-    const text = String(value || '').trim().toUpperCase();
-    const match = text.match(/^TF-(\d{7})$/) || text.match(/^(\d{7})$/);
-    return match ? match[1] : null;
-}
+async function ensureMappingFromR2(token) {
+    const cleanToken = String(token || '').trim();
+    if (!cleanToken) return null;
 
-function tfidFromToken(token) {
-    return `TF-${String(token || '').trim()}`;
-}
-
-async function getGlobalStatus() {
-    let status = await StatusModel.findOne({ key: STATUS_KEY });
-    if (!status) {
-        status = await StatusModel.create({ key: STATUS_KEY, totalSize: 0, reservedSize: 0, activeUploads: 0, reservationExpiresAt: null });
-    }
-    return status;
-}
-
-async function listR2Objects() {
-    const objects = [];
-    let continuationToken = '';
-    do {
-        const params = { Bucket: R2_BUCKET, MaxKeys: 1000 };
-        if (continuationToken) params.ContinuationToken = continuationToken;
-        const response = await s3.send(new ListObjectsV2Command(params));
-        const page = Array.isArray(response.Contents) ? response.Contents.filter(object => /^\d{7}$/.test(String(object.Key || ''))) : [];
-        objects.push(...page);
-        if (!response.IsTruncated || !response.NextContinuationToken) break;
-        continuationToken = response.NextContinuationToken;
-    } while (true);
-    return objects;
-}
-
-async function listPendingR2Objects() {
-    const objects = [];
-    let continuationToken = '';
-    do {
-        const params = { Bucket: R2_BUCKET, Prefix: PENDING_PREFIX, MaxKeys: 1000 };
-        if (continuationToken) params.ContinuationToken = continuationToken;
-        const response = await s3.send(new ListObjectsV2Command(params));
-        const page = Array.isArray(response.Contents) ? response.Contents.filter(object => {
-            const key = String(object.Key || '');
-            return key.startsWith(PENDING_PREFIX) && /^\d{7}$/.test(key.slice(PENDING_PREFIX.length));
-        }) : [];
-        objects.push(...page);
-        if (!response.IsTruncated || !response.NextContinuationToken) break;
-        continuationToken = response.NextContinuationToken;
-    } while (true);
-    return objects;
-}
-
-async function reconcileR2Status() {
-    await getGlobalStatus();
-    const objects = await listR2Objects();
-    const actualTotal = objects.reduce((sum, object) => sum + Math.max(0, Number(object.Size || 0)), 0);
-    const now = new Date();
-    await StatusModel.updateOne(
-        { key: STATUS_KEY },
-        { $set: { totalSize: actualTotal, lastReconcile: now } }
-    );
-    const status = await getGlobalStatus();
-    return { status, objects, actualTotal };
-}
-
-async function freeR2SpaceForUpload(requestedSize, objects, reservedSize = 0) {
-    const requested = Math.max(0, Number(requestedSize || 0));
-    const reserved = Math.max(0, Number(reservedSize || 0));
-    if (!Number.isSafeInteger(requested) || requested <= 0) {
-        throw Object.assign(new Error('Invalid upload size'), { status: 400 });
-    }
-
-    let actualTotal = objects.reduce((sum, object) => sum + Math.max(0, Number(object.Size || 0)), 0);
-    const requiredFree = Math.max(0, actualTotal + reserved + requested - LIMIT_R2_BYTES);
-    if (requiredFree <= 0) return { deletedBytes: 0, deletedCount: 0, actualTotal, objects };
-
-    const candidates = objects
-        .filter(object => /^\d{7}$/.test(String(object.Key || '')) && Number(object.Size || 0) > 0)
-        .sort((a, b) => {
-            const aTime = a.LastModified ? new Date(a.LastModified).getTime() : 0;
-            const bTime = b.LastModified ? new Date(b.LastModified).getTime() : 0;
-            if (aTime !== bTime) return aTime - bTime;
-            return Number(a.Size || 0) - Number(b.Size || 0);
-        });
-
-    let freedBytes = 0;
-    let deletedCount = 0;
-    const deletedKeys = new Set();
-
-    for (const object of candidates) {
-        if (freedBytes >= requiredFree) break;
-        const key = String(object.Key || '');
-        if (!key || deletedKeys.has(key)) continue;
-        await s3.send(new DeleteObjectCommand({ Bucket: R2_BUCKET, Key: key }));
-        deletedKeys.add(key);
-        freedBytes += Math.max(0, Number(object.Size || 0));
-        deletedCount += 1;
-    }
-
-    const refreshed = await reconcileR2Status();
-    actualTotal = Math.max(0, Number(refreshed.actualTotal || 0));
-
-    if (actualTotal + reserved + requested > LIMIT_R2_BYTES) {
-        throw Object.assign(new Error('Not enough R2 capacity after cleanup'), { status: 507 });
-    }
-
-    return {
-        deletedBytes: freedBytes,
-        deletedCount,
-        actualTotal,
-        objects: refreshed.objects
-    };
-}
-
-async function clearExpiredUploadReservation() {
-    const status = await getGlobalStatus();
-    const now = Date.now();
-    const expiration = status.reservationExpiresAt ? new Date(status.reservationExpiresAt).getTime() : 0;
-    const pendingObjects = await listPendingR2Objects();
-    const cutoff = now - UPLOAD_RESERVATION_TTL_MS;
-
-    for (const object of pendingObjects) {
-        const key = String(object.Key || '');
-        if (!key) continue;
-        const lastModified = object.LastModified ? new Date(object.LastModified).getTime() : 0;
-        if (lastModified > 0 && lastModified <= cutoff) {
-            try {
-                await s3.send(new DeleteObjectCommand({ Bucket: R2_BUCKET, Key: key }));
-            } catch (err) {}
-        }
-    }
-
-    if (expiration && expiration <= now) {
-        const remaining = await listPendingR2Objects();
-        for (const object of remaining) {
-            const key = String(object.Key || '');
-            if (!key) continue;
-            try {
-                await s3.send(new DeleteObjectCommand({ Bucket: R2_BUCKET, Key: key }));
-            } catch (err) {}
-        }
-        const expired = await StatusModel.findOneAndUpdate(
-            { key: STATUS_KEY, reservationExpiresAt: { $lte: new Date(now) } },
-            { $set: { reservedSize: 0, activeUploads: 0, reservationExpiresAt: null } },
-            { new: true }
-        );
-        return expired || await getGlobalStatus();
-    }
-
-    if (Number(status.reservedSize || 0) <= 0) {
-        const cleared = await StatusModel.findOneAndUpdate(
-            { key: STATUS_KEY, reservedSize: { $lte: 0 } },
-            { $set: { reservedSize: 0, activeUploads: 0, reservationExpiresAt: null } },
-            { new: true }
-        );
-        return cleared || await getGlobalStatus();
-    }
-
-    return status;
-}
-
-async function ensureMappingFromR2(token, fallbackName) {
-    const meta = await getRemoteObjectMeta(token);
+    const meta = await getRemoteObjectMeta(cleanToken);
     if (!meta || !meta.exists) return null;
-    const metadataToken = String(meta.metadata && meta.metadata.token || '').trim();
-    if (metadataToken && metadataToken !== token) return null;
-    const originalName = safeDecodeURIComponent((meta.metadata && meta.metadata.originalname) || fallbackName || token) || fallbackName || token;
-    const safeOriginal = safeFileName((meta.metadata && meta.metadata.safeoriginal) || originalName || token);
+
+    const metadata = meta.metadata || {};
+    const metadataToken = String(metadata.token || '').trim();
+    const originalNameEncoded = String(metadata.originalname || '').trim();
+    const safeOriginalValue = String(metadata.safeoriginal || '').trim();
+
+    if (!metadataToken || metadataToken !== cleanToken || !originalNameEncoded || !safeOriginalValue) {
+        console.error(`[R2] METADATA_INVALID token=${cleanToken}`);
+        return null;
+    }
+
+    const originalName = safeDecodeURIComponent(originalNameEncoded);
+    const safeOriginal = safeFileName(safeOriginalValue);
+
     return {
-        token,
-        originalName,
-        safeOriginal,
-        size: meta.contentLength,
+        token: metadataToken,
+        originalName: originalName || safeOriginal,
+        safeOriginal: safeOriginal || 'file',
+        size: Number(meta.contentLength || 0),
         mime: meta.contentType || contentTypeFromName(safeOriginal),
-        createdAt: meta.lastModified || new Date().toISOString(),
-        storage: 'r2',
-        etag: meta.etag || ''
+        createdAt: meta.lastModified || null
     };
 }
 
@@ -1278,7 +1252,7 @@ app.options('*', cors());
 
 app.use((req, res, next) => {
     res.header('Access-Control-Allow-Origin', '*');
-    res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept, Range, X-Filename, X-File-Size, X-File-Mime, X-TFID');
+    res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept, Range');
     res.header('Access-Control-Expose-Headers', 'Content-Range, Accept-Ranges, Content-Length, Content-Type, Content-Disposition');
     next();
 });
@@ -1295,278 +1269,167 @@ app.use(compression({
 app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public'), { index: 'index.html' }));
 
-app.post('/upload', async (req, res) => {
-    return withUploadStateLock(async () => {
-        try {
-        await clearExpiredUploadReservation();
-        let body = req.body && typeof req.body === 'object' ? req.body : {};
-        const originalName = String(body.filename || body.originalName || body.originalname || req.get('x-filename') || '').trim();
-        const declaredSize = Number(body.size || req.get('x-file-size') || 0);
-        const contentType = String(body.contentType || body.mime || req.get('x-file-mime') || '').trim() || contentTypeFromName(originalName);
+async function generateUniqueUploadToken() {
+    for (let attempt = 0; attempt < 20; attempt += 1) {
+        const token = genToken();
+        const exists = await getRemoteObjectMeta(token);
+        if (!exists) return token;
+    }
+    throw Object.assign(new Error('Unable to generate a unique upload token'), { status: 503 });
+}
+
+app.post('/upload/presign', async (req, res) => {
+    try {
+        const body = req.body && typeof req.body === 'object' ? req.body : {};
+        const originalName = String(body.filename || body.originalname || req.get('x-filename') || '').trim();
+        const size = Number(body.size || req.get('x-file-size') || 0);
+        const contentType = String(body.contentType || req.get('x-content-type') || '').trim() || contentTypeFromName(originalName);
+
+        console.log(`[UPLOAD] PRESIGN_REQUEST filename=${JSON.stringify(originalName)} size=${size} contentType=${JSON.stringify(contentType)}`);
 
         if (!originalName) return res.status(400).json({ error: 'filename is required' });
-        if (!Number.isSafeInteger(declaredSize) || declaredSize <= 0) return res.status(400).json({ error: 'valid file size is required' });
-        if (declaredSize > MAX_FILE_SIZE) return res.status(413).json({ error: 'file too large', maximumBytes: MAX_FILE_SIZE });
+        if (!Number.isSafeInteger(size) || size <= 0) return res.status(400).json({ error: 'valid file size is required' });
+        if (size > MAX_FILE_SIZE) return res.status(413).json({ error: 'file too large', maximumBytes: MAX_FILE_SIZE });
 
-        let updated = null;
-        let reconciled = null;
-        let status = null;
-        let usedBytes = 0;
-        let reservedBytes = 0;
+        const current = await syncStatusFromR2();
+        console.log(`[UPLOAD] CAPACITY_CHECK usedBytes=${current.totalSize} requestedBytes=${size} limitBytes=${LIMIT_R2_BYTES}`);
 
-        for (let attempt = 0; attempt < 4; attempt += 1) {
-            await clearExpiredUploadReservation();
-            reconciled = await reconcileR2Status();
-            status = reconciled.status;
-            usedBytes = Math.max(0, Number(status.totalSize || 0));
-            reservedBytes = Math.max(0, Number(status.reservedSize || 0));
-
-            if (usedBytes + reservedBytes + declaredSize > LIMIT_R2_BYTES) {
-                try {
-                    const cleanup = await freeR2SpaceForUpload(declaredSize, reconciled.objects, reservedBytes);
-                    usedBytes = cleanup.actualTotal;
-                    reconciled = await reconcileR2Status();
-                    status = reconciled.status;
-                    usedBytes = Math.max(0, Number(status.totalSize || 0));
-                    reservedBytes = Math.max(0, Number(status.reservedSize || 0));
-                } catch (cleanupError) {
-                    return res.status(Number(cleanupError.status || 507)).json({
-                        error: cleanupError.message || 'R2 storage limit reached',
-                        usedBytes,
-                        reservedBytes,
-                        maximumBytes: LIMIT_R2_BYTES
-                    });
-                }
-            }
-
-            const maxReservedBeforeThisUpload = LIMIT_R2_BYTES - usedBytes - declaredSize;
-            if (maxReservedBeforeThisUpload < 0) {
-                return res.status(507).json({ error: 'R2 storage limit reached', usedBytes, reservedBytes, maximumBytes: LIMIT_R2_BYTES });
-            }
-
-            const reservationExpiresAt = new Date(Date.now() + UPLOAD_RESERVATION_TTL_MS);
-            updated = await StatusModel.findOneAndUpdate(
-                {
-                    key: STATUS_KEY,
-                    reservedSize: { $lte: maxReservedBeforeThisUpload }
-                },
-                {
-                    $inc: { reservedSize: declaredSize, activeUploads: 1 },
-                    $max: { reservationExpiresAt }
-                },
-                { new: true }
-            );
-
-            if (updated) break;
+        if (current.totalSize + size > LIMIT_R2_BYTES) {
+            console.log(`[UPLOAD] LIMIT_EXCEEDED usedBytes=${current.totalSize} requestedBytes=${size} limitBytes=${LIMIT_R2_BYTES}`);
+            await wipeEntireR2Bucket('capacity');
         }
 
-        if (!updated) return res.status(409).json({ error: 'unable to reserve upload capacity' });
-
-        let token = '';
-        for (let attempt = 0; attempt < 8; attempt += 1) {
-            const candidate = genToken();
-            const finalObject = await getRemoteObjectMeta(candidate);
-            const pendingObject = await getRemoteObjectMeta(candidate, buildPendingKey(candidate));
-            if (!finalObject && !pendingObject) {
-                token = candidate;
-                break;
-            }
-        }
-
-        if (!token) {
-            await StatusModel.findOneAndUpdate(
-                { key: STATUS_KEY, reservedSize: { $gte: declaredSize }, activeUploads: { $gte: 1 } },
-                { $inc: { reservedSize: -declaredSize, activeUploads: -1 } },
-                { new: true }
-            );
-            return res.status(503).json({ error: 'unable to allocate upload token' });
-        }
-
+        const token = await generateUniqueUploadToken();
         const safeOriginal = safeFileName(originalName);
+        const expiresAt = new Date(Date.now() + PENDING_UPLOAD_TTL_MS);
         const metadata = {
             originalname: encodeURIComponent(originalName),
             safeoriginal: safeOriginal,
             token
         };
-        const pendingKey = buildPendingKey(token);
-        const command = new PutObjectCommand({
-            Bucket: R2_BUCKET,
-            Key: pendingKey,
-            ContentType: contentType,
-            Metadata: metadata
+
+        console.log(`[UPLOAD] TOKEN_CREATED token=${token} safeoriginal=${JSON.stringify(safeOriginal)}`);
+
+        await PendingUploadModel.create({
+            _id: token,
+            expiresAt
         });
-        let uploadUrl = '';
+        console.log(`[UPLOAD] PENDING_CREATED token=${token} expiresAt=${expiresAt.toISOString()}`);
+
         try {
-            uploadUrl = await getSignedUrl(s3, command, { expiresIn: UPLOAD_SIGNED_TTL_SECONDS });
+            const command = new PutObjectCommand({
+                Bucket: R2_BUCKET,
+                Key: token,
+                ContentType: contentType,
+                ContentLength: size,
+                Metadata: metadata
+            });
+
+            const uploadUrl = await getSignedUrl(s3, command, { expiresIn: UPLOAD_URL_TTL_SECONDS });
+            const origin = (process.env.BASE_URL || 'https://bref.adamdh7.org').replace(/\/+$/, '');
+            const sharePath = `/TF-${token}/${encodeURIComponent(safeOriginal)}`;
+
+            console.log(`[UPLOAD] PRESIGNED_URL_CREATED token=${token} ttlSeconds=${UPLOAD_URL_TTL_SECONDS}`);
+
+            return res.json({
+                token,
+                method: 'PUT',
+                uploadUrl,
+                expiresIn: UPLOAD_URL_TTL_SECONDS,
+                headers: {
+                    'Content-Type': contentType,
+                    'x-amz-meta-originalname': metadata.originalname,
+                    'x-amz-meta-safeoriginal': metadata.safeoriginal,
+                    'x-amz-meta-token': metadata.token
+                },
+                url: `${origin}${sharePath}`,
+                sharePath
+            });
         } catch (error) {
-            await StatusModel.findOneAndUpdate(
-                { key: STATUS_KEY, reservedSize: { $gte: declaredSize }, activeUploads: { $gte: 1 } },
-                { $inc: { reservedSize: -declaredSize, activeUploads: -1 } },
-                { new: true }
-            );
+            await PendingUploadModel.deleteOne({ _id: token }).catch(() => {});
+            console.error(`[UPLOAD] PRESIGN_ERROR token=${token} error=${error.message || error}`);
             throw error;
         }
-
-        const tfid = tfidFromToken(token);
-        const origin = (process.env.BASE_URL || 'https://bref.adamdh7.org').replace(/\/+$/, '');
-        const sharePath = `/TF-${token}/${encodeURIComponent(safeOriginal)}`;
-
-        return res.status(201).json({
-            success: true,
-            TFID: tfid,
-            token,
-            filename: safeOriginal,
-            originalName,
-            contentType,
-            size: declaredSize,
-            uploadUrl,
-            uploadHeaders: {
-                'content-type': contentType,
-                'x-amz-meta-originalname': metadata.originalname,
-                'x-amz-meta-safeoriginal': metadata.safeoriginal,
-                'x-amz-meta-token': metadata.token
-            },
-            sharePath,
-            url: `${origin}${sharePath}`,
-            expiresAt: updated.reservationExpiresAt ? new Date(updated.reservationExpiresAt).toISOString() : new Date(Date.now() + UPLOAD_RESERVATION_TTL_MS).toISOString(),
-            usedBytes,
-            maximumBytes: LIMIT_R2_BYTES
-        });
-        } catch (err) {
-            return res.status(Number(err.status || 500)).json({ error: err.message || 'upload preparation failed' });
-        }
-    });
+    } catch (error) {
+        const status = Number(error.status || 500);
+        console.error(`[UPLOAD] PRESIGN_FAILED status=${status} error=${error.message || error}`);
+        return res.status(status).json({ error: error.message || 'upload presign failed' });
+    }
 });
 
-app.post('/upload/complete', async (req, res) => {
-    return withUploadStateLock(async () => {
-        try {
-        const body = req.body && typeof req.body === 'object' ? req.body : {};
-        const tfid = String(body.TFID || '').trim();
-        const token = tokenFromTFID(tfid);
-        if (!token) return res.status(400).json({ error: 'valid TFID is required' });
-
-        let meta = await getRemoteObjectMeta(token);
-        if (meta && meta.exists) {
-            const metadataToken = String(meta.metadata && meta.metadata.token || '').trim();
-            if (metadataToken !== token) return res.status(409).json({ error: 'R2 metadata token mismatch' });
-            if (meta.contentLength <= 0 || meta.contentLength > MAX_FILE_SIZE) return res.status(413).json({ error: 'invalid uploaded file size' });
-
-            const originalName = safeDecodeURIComponent((meta.metadata && meta.metadata.originalname) || (meta.metadata && meta.metadata.safeoriginal) || token) || token;
-            const safeOriginal = safeFileName((meta.metadata && meta.metadata.safeoriginal) || originalName || token);
-            const origin = (process.env.BASE_URL || 'https://bref.adamdh7.org').replace(/\/+$/, '');
-            const sharePath = `/TF-${token}/${encodeURIComponent(safeOriginal)}`;
-            const reconciled = await reconcileR2Status();
-
-            return res.json({
-                success: true,
-                TFID: tfidFromToken(token),
-                token,
-                filename: safeOriginal,
-                originalName,
-                size: meta.contentLength,
-                mime: meta.contentType || contentTypeFromName(safeOriginal),
-                url: `${origin}${sharePath}`,
-                sharePath,
-                usedBytes: Math.max(0, Number(reconciled.status.totalSize || 0)),
-                maximumBytes: LIMIT_R2_BYTES
-            });
-        }
-
-        const pendingKey = buildPendingKey(token);
-        meta = await getRemoteObjectMeta(token, pendingKey);
-        if (!meta || !meta.exists) return res.status(404).json({ error: 'uploaded file not found in R2' });
-
-        const metadataToken = String(meta.metadata && meta.metadata.token || '').trim();
-        if (metadataToken !== token) return res.status(409).json({ error: 'R2 metadata token mismatch' });
-        if (meta.contentLength <= 0 || meta.contentLength > MAX_FILE_SIZE) return res.status(413).json({ error: 'invalid uploaded file size' });
-
-        const reconciledBeforeComplete = await reconcileR2Status();
-        const usedBytes = Math.max(0, Number(reconciledBeforeComplete.status.totalSize || 0));
-        const reservedBytes = Math.max(0, Number(reconciledBeforeComplete.status.reservedSize || 0));
-        if (usedBytes + reservedBytes > LIMIT_R2_BYTES) {
-            return res.status(507).json({ error: 'R2 storage limit reached', usedBytes, reservedBytes, maximumBytes: LIMIT_R2_BYTES });
-        }
-
-        const finalObject = await getRemoteObjectMeta(token);
-        if (finalObject && finalObject.exists) {
-            const refreshed = await reconcileR2Status();
-            const originalName = safeDecodeURIComponent((finalObject.metadata && finalObject.metadata.originalname) || (finalObject.metadata && finalObject.metadata.safeoriginal) || token) || token;
-            const safeOriginal = safeFileName((finalObject.metadata && finalObject.metadata.safeoriginal) || originalName || token);
-            const origin = (process.env.BASE_URL || 'https://bref.adamdh7.org').replace(/\/+$/, '');
-            const sharePath = `/TF-${token}/${encodeURIComponent(safeOriginal)}`;
-            return res.json({
-                success: true,
-                TFID: tfidFromToken(token),
-                token,
-                filename: safeOriginal,
-                originalName,
-                size: finalObject.contentLength,
-                mime: finalObject.contentType || contentTypeFromName(safeOriginal),
-                url: `${origin}${sharePath}`,
-                sharePath,
-                usedBytes: Math.max(0, Number(refreshed.status.totalSize || 0)),
-                maximumBytes: LIMIT_R2_BYTES
-            });
-        }
-
-        const copySource = `${R2_BUCKET}/${pendingKey}`;
-        await s3.send(new CopyObjectCommand({
-            Bucket: R2_BUCKET,
-            Key: token,
-            CopySource: copySource,
-            MetadataDirective: 'COPY'
-        }));
-        await s3.send(new DeleteObjectCommand({ Bucket: R2_BUCKET, Key: pendingKey }));
-
-        const refreshed = await reconcileR2Status();
-        const originalName = safeDecodeURIComponent((meta.metadata && meta.metadata.originalname) || (meta.metadata && meta.metadata.safeoriginal) || token) || token;
-        const safeOriginal = safeFileName((meta.metadata && meta.metadata.safeoriginal) || originalName || token);
-        const origin = (process.env.BASE_URL || 'https://bref.adamdh7.org').replace(/\/+$/, '');
-        const sharePath = `/TF-${token}/${encodeURIComponent(safeOriginal)}`;
-
-        const released = await StatusModel.findOneAndUpdate(
-            { key: STATUS_KEY, reservedSize: { $gte: meta.contentLength }, activeUploads: { $gte: 1 } },
-            { $inc: { reservedSize: -meta.contentLength, activeUploads: -1 } },
-            { new: true }
-        );
-        if (released && Number(released.reservedSize || 0) <= 0) {
-            await StatusModel.updateOne(
-                { key: STATUS_KEY, reservedSize: { $lte: 0 } },
-                { $set: { reservedSize: 0, activeUploads: 0, reservationExpiresAt: null } }
-            );
-        }
-
-        return res.json({
-            success: true,
-            TFID: tfidFromToken(token),
-            token,
-            filename: safeOriginal,
-            originalName,
-            size: meta.contentLength,
-            mime: meta.contentType || contentTypeFromName(safeOriginal),
-            url: `${origin}${sharePath}`,
-            sharePath,
-            usedBytes: Math.max(0, Number(refreshed.status.totalSize || 0)),
-            maximumBytes: LIMIT_R2_BYTES
-        });
-        } catch (err) {
-            return res.status(Number(err.status || 500)).json({ error: err.message || 'upload completion failed' });
-        }
-    });
-});
-
-app.get('/upload/status', async (req, res) => {
+app.post('/upload/confirm', async (req, res) => {
     try {
-        const reconciled = await reconcileR2Status();
+        const body = req.body && typeof req.body === 'object' && !Array.isArray(req.body) ? req.body : {};
+        const bodyKeys = Object.keys(body);
+        const token = String(body.token || body.tfid || req.query.token || '').trim();
+
+        console.log(`[UPLOAD] CONFIRM_REQUEST token=${token || 'missing'}`);
+
+        if (!token) return res.status(400).json({ error: 'token is required' });
+        if (bodyKeys.length && (bodyKeys.length !== 1 || !['token', 'tfid'].includes(bodyKeys[0]))) return res.status(400).json({ error: 'only token is allowed' });
+
+        const pending = await PendingUploadModel.findById(token).lean();
+        if (!pending) {
+            console.log(`[UPLOAD] CONFIRM_REJECTED token=${token} reason=not_pending`);
+            return res.status(409).json({ error: 'upload is not pending' });
+        }
+
+        const meta = await getRemoteObjectMeta(token);
+        console.log(`[UPLOAD] CONFIRM_R2_HEAD token=${token} exists=${Boolean(meta && meta.exists)}`);
+
+        if (!meta || !meta.exists) {
+            await PendingUploadModel.deleteOne({ _id: token });
+            console.log(`[UPLOAD] CONFIRM_REJECTED token=${token} reason=object_missing`);
+            return res.status(404).json({ error: 'uploaded file not found in R2' });
+        }
+
+        const metadata = meta.metadata || {};
+        if (String(metadata.token || '').trim() !== token) {
+            await s3.send(new DeleteObjectCommand({ Bucket: R2_BUCKET, Key: token })).catch(() => {});
+            await PendingUploadModel.deleteOne({ _id: token });
+            console.log(`[UPLOAD] CONFIRM_REJECTED token=${token} reason=metadata_token_mismatch`);
+            return res.status(400).json({ error: 'invalid R2 metadata' });
+        }
+
+        if (!metadata.originalname || !metadata.safeoriginal) {
+            await s3.send(new DeleteObjectCommand({ Bucket: R2_BUCKET, Key: token })).catch(() => {});
+            await PendingUploadModel.deleteOne({ _id: token });
+            console.log(`[UPLOAD] CONFIRM_REJECTED token=${token} reason=metadata_incomplete`);
+            return res.status(400).json({ error: 'invalid R2 metadata' });
+        }
+
+        const size = Number(meta.contentLength || 0);
+        if (!Number.isSafeInteger(size) || size <= 0 || size > MAX_FILE_SIZE) {
+            await s3.send(new DeleteObjectCommand({ Bucket: R2_BUCKET, Key: token })).catch(() => {});
+            await PendingUploadModel.deleteOne({ _id: token });
+            console.log(`[UPLOAD] CONFIRM_REJECTED token=${token} reason=invalid_size size=${size}`);
+            return res.status(400).json({ error: 'invalid uploaded file size' });
+        }
+
+        const status = await syncStatusFromR2();
+        await PendingUploadModel.deleteOne({ _id: token });
+
+        const originalName = safeDecodeURIComponent(String(metadata.originalname));
+        const safeOriginal = safeFileName(String(metadata.safeoriginal));
+        const origin = (process.env.BASE_URL || 'https://bref.adamdh7.org').replace(/\/+$/, '');
+        const sharePath = `/TF-${token}/${encodeURIComponent(safeOriginal)}`;
+
+        console.log(`[UPLOAD] CONFIRM_OK token=${token} size=${size} usedBytes=${status.totalSize} originalname=${JSON.stringify(originalName)}`);
+
         return res.json({
-            uploading: Number(reconciled.status.activeUploads || 0) > 0,
-            reservedBytes: Math.max(0, Number(reconciled.status.reservedSize || 0)),
-            usedBytes: Math.max(0, Number(reconciled.status.totalSize || 0)),
-            maximumBytes: LIMIT_R2_BYTES
+            success: true,
+            token,
+            size,
+            originalname: originalName,
+            safeoriginal: safeOriginal,
+            url: `${origin}${sharePath}`,
+            sharePath,
+            totalSize: status.totalSize,
+            limitBytes: LIMIT_R2_BYTES
         });
-    } catch (err) {
-        return res.status(500).json({ error: 'unable to read upload status' });
+    } catch (error) {
+        console.error(`[UPLOAD] CONFIRM_FAILED error=${error.message || error}`);
+        return res.status(Number(error.status || 500)).json({ error: error.message || 'upload confirmation failed' });
     }
 });
 
@@ -1576,7 +1439,7 @@ app.get(['/TF-:token/download', '/TF-:token/download/:name'], async (req, res) =
         if (token) token = token.replace(/\/$/, '');
 
         const requestedName = req.params.name ? safeDecodeURIComponent(req.params.name) : null;
-        const entry = await ensureMappingFromR2(token, requestedName);
+        const entry = await ensureMappingFromR2(token);
         if (!entry) return sendUnknown(req, res);
 
         const realName = entry.safeOriginal || entry.originalName || 'file';
@@ -1601,7 +1464,7 @@ app.get(['/TF-:token', '/TF-:token/', '/TF-:token/:name'], async (req, res) => {
         if (token) token = token.replace(/\/$/, '');
 
         const requestedName = req.params.name || null;
-        const entry = await ensureMappingFromR2(token, requestedName);
+        const entry = await ensureMappingFromR2(token);
         if (!entry) return sendUnknown(req, res);
 
         const realName = entry.safeOriginal || entry.originalName || 'file';
@@ -1646,17 +1509,20 @@ app.get(['/TF-:token', '/TF-:token/', '/TF-:token/:name'], async (req, res) => {
 
 app.get('/_admin/mappings', async (req, res) => {
     try {
-        const reconciled = await reconcileR2Status();
-        const objects = reconciled.objects || [];
-        const tokens = objects.map(object => String(object.Key || '')).filter(Boolean).slice(0, 50);
-        return res.json({
-            count: objects.length,
-            tokens,
-            totalSize: Math.max(0, Number(reconciled.status.totalSize || 0)),
-            reservedSize: Math.max(0, Number(reconciled.status.reservedSize || 0)),
-            activeUploads: Math.max(0, Number(reconciled.status.activeUploads || 0)),
-            maximumBytes: LIMIT_R2_BYTES
-        });
+        const objects = await listR2Objects();
+        const tokens = [];
+
+        for (const object of objects.slice(0, 50)) {
+            try {
+                const meta = await getRemoteObjectMeta(object.key);
+                const token = meta && meta.metadata ? String(meta.metadata.token || '').trim() : '';
+                if (token) tokens.push(token);
+            } catch (error) {}
+        }
+
+        const status = await syncStatusFromR2();
+        const pendingCount = await PendingUploadModel.countDocuments();
+        return res.json({ count: objects.length, tokens, totalSize: status.totalSize, limitBytes: LIMIT_R2_BYTES, pendingCount });
     } catch(e) {
         return res.status(500).json({ error: 'Server Error' });
     }
@@ -1699,19 +1565,35 @@ app.get('*', (req, res, next) => {
 });
 
 app.use((err, req, res, next) => {
+    if (err && err.code === 'LIMIT_FILE_SIZE') return res.status(413).json({ error: 'Fichye a twò gwo. Max direct PUT: 4.995Go' });
     if (err) return res.status(500).json({ error: 'Erè nan sève a' });
     next();
 });
 
 setInterval(async () => {
     try {
-        await withUploadStateLock(async () => {
-            await clearExpiredUploadReservation();
-            await reconcileR2Status();
-        });
-    } catch(e) {}
-}, R2_RECONCILE_INTERVAL_MS);
+        await cleanupExpiredPendingUploads();
+    } catch (error) {
+        console.error(`[UPLOAD] PENDING_CLEANUP_ERROR error=${error.message || error}`);
+    }
+}, PENDING_CLEANUP_INTERVAL_MS);
 
-reconcileR2Status().catch(() => {});
+setInterval(async () => {
+    try {
+        await syncStatusFromR2();
+    } catch (error) {
+        console.error(`[R2] STATUS_SYNC_ERROR error=${error.message || error}`);
+    }
+}, R2_STATUS_SYNC_INTERVAL_MS);
 
-app.listen(PORT);
+setInterval(async () => {
+    try {
+        await cleanupOldR2Objects();
+    } catch (error) {
+        console.error(`[R2] OLD_OBJECT_CLEANUP_ERROR error=${error.message || error}`);
+    }
+}, 3600000);
+
+app.listen(PORT, () => {
+    console.log(`[SERVER] LISTENING port=${PORT}`);
+});
