@@ -172,10 +172,11 @@
     .ios-toast {
       position: fixed;
       --toast-bottom: calc(40px + env(safe-area-inset-bottom, 0px));
+      --toast-shift-y: 0px;
       bottom: var(--toast-bottom);
       left: 50%;
       right: auto;
-      transform: translateX(-50%);
+      transform: translate3d(-50%, var(--toast-shift-y), 0);
       background: rgba(28, 28, 30, 0.9);
       -webkit-backdrop-filter: blur(20px);
       backdrop-filter: blur(20px);
@@ -185,13 +186,14 @@
       border-radius: 30px;
       font-size: 14px;
       font-weight: 600;
+      line-height: 1.25;
       box-shadow: 0 8px 24px rgba(0,0,0,0.4);
       z-index: 999999;
-      transition: bottom 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275), opacity 0.3s;
+      transition: transform 0.42s cubic-bezier(0.175, 0.885, 0.32, 1.275), opacity 0.3s;
       opacity: 0;
       pointer-events: none;
       width: max-content;
-      max-width: min(90vw, 480px);
+      max-width: min(calc(100vw - 32px), 480px);
       min-width: 0;
       text-align: center;
       overflow-wrap: anywhere;
@@ -213,9 +215,45 @@
       transition: transform 0.3s cubic-bezier(0.175, 0.885, 0.275, 1.275);
     }
     
+    .selected-file-row {
+      overflow: hidden;
+      min-width: 0;
+    }
+    .selected-file-content {
+      width: min(100%, calc(100% - 60px));
+    }
+    .selected-file-action {
+      width: 48px;
+      flex: 0 0 48px;
+    }
+    .selected-file-remove {
+      width: 48px;
+      height: 48px;
+      min-width: 48px;
+      max-width: 48px;
+      min-height: 48px;
+      max-height: 48px;
+      padding: 0;
+      border: 0;
+      flex: 0 0 48px;
+    }
+    .selected-file-remove-icon {
+      width: 22px;
+      height: 22px;
+      min-width: 22px;
+      max-width: 22px;
+      min-height: 22px;
+      max-height: 22px;
+      flex: 0 0 22px;
+    }
     @media (max-width: 420px) {
       .file-name { font-size: 13px; }
       .ad-layer { display: none; }
+      .selected-file-row { gap: 10px; padding: 12px; }
+      .selected-file-content { gap: 12px; width: min(100%, calc(100% - 54px)); }
+      .selected-file-action { width: 44px; flex-basis: 44px; }
+      .selected-file-remove { width: 44px; height: 44px; min-width: 44px; max-width: 44px; min-height: 44px; max-height: 44px; flex-basis: 44px; }
+      .selected-file-remove-icon { width: 20px; height: 20px; min-width: 20px; max-width: 20px; min-height: 20px; max-height: 20px; flex-basis: 20px; }
     }
   </style>
   <script>
@@ -472,13 +510,24 @@
     function updateToastMenuPosition(menuOpen) {
         const toast = document.getElementById('ios-toast');
         const modal = document.getElementById('settings-modal');
+        if (!toast || !modal) return;
+
+        if (!toast.classList.contains('show')) {
+            toast.style.setProperty('--toast-shift-y', '0px');
+            return;
+        }
+
         if (menuOpen) {
             const rect = modal.getBoundingClientRect();
-            const viewportHeight = window.innerHeight || document.documentElement.clientHeight;
-            const bottom = Math.max(12, viewportHeight - rect.top + 10);
-            toast.style.setProperty('--toast-bottom', `${bottom}px`);
+            const toastRect = toast.getBoundingClientRect();
+            const currentShift = parseFloat(getComputedStyle(toast).getPropertyValue('--toast-shift-y')) || 0;
+            const baseTop = toastRect.top - currentShift;
+            const gap = 12;
+            const targetTop = rect.top - gap - toastRect.height;
+            const shift = targetTop - baseTop;
+            toast.style.setProperty('--toast-shift-y', `${shift}px`);
         } else {
-            toast.style.setProperty('--toast-bottom', 'calc(40px + env(safe-area-inset-bottom, 0px))');
+            toast.style.setProperty('--toast-shift-y', '0px');
         }
     }
 
@@ -486,13 +535,17 @@
         const toast = document.getElementById('ios-toast');
         toast.innerText = msg;
         toast.classList.add('show');
-        updateToastMenuPosition(document.getElementById('settings-modal').classList.contains('active'));
+        requestAnimationFrame(() => {
+            updateToastMenuPosition(document.getElementById('settings-modal').classList.contains('active'));
+        });
         if (window.toastTimeout) clearTimeout(window.toastTimeout);
         window.toastTimeout = setTimeout(() => hideToast(), 3000);
     }
 
     function hideToast() {
-        document.getElementById('ios-toast').classList.remove('show');
+        const toast = document.getElementById('ios-toast');
+        toast.classList.remove('show');
+        toast.style.setProperty('--toast-shift-y', '0px');
     }
 
     function openMenu() {
@@ -501,9 +554,13 @@
         document.getElementById('backdrop').classList.add('active');
         modal.style.transform = '';
         modal.classList.add('active');
-        requestAnimationFrame(() => {
-            requestAnimationFrame(() => updateToastMenuPosition(true));
-        });
+        const startedAt = performance.now();
+        const followMenu = (now) => {
+            if (!modal.classList.contains('active')) return;
+            updateToastMenuPosition(true);
+            if (now - startedAt < 420) requestAnimationFrame(followMenu);
+        };
+        requestAnimationFrame(followMenu);
     }
 
     function closeMenu() {
@@ -517,7 +574,7 @@
 
     window.addEventListener('resize', () => {
         if (document.getElementById('settings-modal').classList.contains('active')) {
-            updateToastMenuPosition(true);
+            requestAnimationFrame(() => updateToastMenuPosition(true));
         }
     });
 
@@ -526,8 +583,16 @@
             if (document.getElementById('settings-modal').classList.contains('active')) {
                 updateToastMenuPosition(true);
             }
-        }, 50);
+        }, 120);
     });
+
+    if (window.visualViewport) {
+        window.visualViewport.addEventListener('resize', () => {
+            if (document.getElementById('settings-modal').classList.contains('active')) {
+                requestAnimationFrame(() => updateToastMenuPosition(true));
+            }
+        });
+    }
 
     let swipeModal = null;
     let startY = 0;
@@ -637,10 +702,10 @@
 
       filesArray.forEach((file, idx) => {
         const row = document.createElement('div');
-        row.className = 'flex items-center justify-between gap-3 bg-white dark:bg-[#0a0a0a] border border-gray-200 dark:border-gray-800 rounded-3xl p-4 w-full transition-all';
+        row.className = 'selected-file-row flex items-center justify-between gap-3 bg-white dark:bg-[#0a0a0a] border border-gray-200 dark:border-gray-800 rounded-3xl p-4 w-full transition-all';
 
         const left = document.createElement('div');
-        left.className = 'flex items-center gap-4 w-full min-w-0';
+        left.className = 'selected-file-content flex items-center gap-4 flex-1 min-w-0';
 
         const icon = document.createElement('div');
         icon.className = 'w-12 h-12 flex-shrink-0 rounded-2xl bg-gray-100 dark:bg-[#111111] flex items-center justify-center text-xs font-bold text-black dark:text-white uppercase tracking-wider';
@@ -663,11 +728,13 @@
         left.appendChild(titleWrap);
 
         const right = document.createElement('div');
-        right.className = 'flex items-center flex-shrink-0 pl-2';
+        right.className = 'selected-file-action flex items-center flex-shrink-0';
 
         const removeBtn = document.createElement('button');
-        removeBtn.className = 'w-10 h-10 flex items-center justify-center rounded-full bg-gray-100 dark:bg-[#111111] text-black dark:text-white hover:bg-gray-200 dark:hover:bg-gray-800 transition-colors';
-        removeBtn.innerHTML = '<svg class="w-5 h-5 pointer-events-none" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path></svg>';
+        removeBtn.type = 'button';
+        removeBtn.setAttribute('aria-label', 'Remove file');
+        removeBtn.className = 'selected-file-remove flex items-center justify-center rounded-full bg-gray-100 dark:bg-[#111111] text-black dark:text-white hover:bg-gray-200 dark:hover:bg-gray-800 transition-colors';
+        removeBtn.innerHTML = '<svg class="selected-file-remove-icon pointer-events-none" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.25" d="M7 7L17 17M17 7L7 17"></path></svg>';
         removeBtn.onclick = () => {
           if (uploading) return;
           filesArray.splice(idx, 1);
@@ -784,6 +851,7 @@
             ui.fileCancelBtn.classList.remove('hidden');
             ui.fileCancelBtn.onclick = () => {
               try { xhr.abort(); } catch(e) {}
+              showToast(tr[currentLang]['msg-err-user']);
             };
           }
         }).then(url => {
@@ -888,6 +956,9 @@
         }
 
         showToast(errorMessage);
+      } else if (aborted > 0) {
+        let txt = finalT['msg-final-err'].replace('{s}', succeeded).replace('{f}', failed).replace('{a}', aborted);
+        showToast(txt);
       } else {
         let txt = finalT['msg-final-ok'].replace('{s}', succeeded);
         showToast(txt);
