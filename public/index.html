@@ -54,6 +54,10 @@
     @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;800;900&display=swap');
     
     html, body {
+      width: 100%;
+      max-width: 100%;
+      min-width: 0;
+      min-height: 100%;
       scrollbar-width: none !important;
       -ms-overflow-style: none !important;
     }
@@ -77,9 +81,17 @@
     }
     body {
       margin: 0;
+      width: 100%;
+      max-width: 100vw;
+      min-width: 0;
+      min-height: 100dvh;
       transition: background-color 0.3s, color 0.3s;
       overflow-x: hidden;
       font-family: 'Inter', sans-serif;
+      box-sizing: border-box;
+    }
+    body * {
+      box-sizing: border-box;
     }
     .brand-text {
       font-weight: 900;
@@ -94,6 +106,20 @@
       position: relative;
       z-index: 50;
       width: 100%;
+      max-width: 48rem;
+      min-width: 0;
+      margin-inline: auto;
+      overflow: visible;
+    }
+    #mainUI > div, #selectedList, #previewAll, #overallProgressWrap {
+      min-width: 0;
+      max-width: 100%;
+    }
+    header {
+      width: 100%;
+      max-width: 48rem;
+      min-width: 0;
+      box-sizing: border-box;
     }
     #ad-left, #ad-right {
       width: 90px;
@@ -116,7 +142,7 @@
     .backdrop.active { opacity: 1; pointer-events: auto; }
 
     .settings-modal {
-      position: fixed; bottom: 0; left: 0; width: 100%;
+      position: fixed; bottom: 0; left: 0; width: 100%; max-width: 100vw;
       z-index: 300;
       border-radius: 28px 28px 0 0; 
       padding-bottom: calc(20px + env(safe-area-inset-bottom));
@@ -145,8 +171,10 @@
 
     .ios-toast {
       position: fixed;
-      bottom: -100px;
+      --toast-bottom: calc(40px + env(safe-area-inset-bottom, 0px));
+      bottom: var(--toast-bottom);
       left: 50%;
+      right: auto;
       transform: translateX(-50%);
       background: rgba(28, 28, 30, 0.9);
       -webkit-backdrop-filter: blur(20px);
@@ -162,8 +190,11 @@
       transition: bottom 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275), opacity 0.3s;
       opacity: 0;
       pointer-events: none;
-      max-width: 90%;
+      width: max-content;
+      max-width: min(90vw, 480px);
+      min-width: 0;
       text-align: center;
+      overflow-wrap: anywhere;
       cursor: pointer;
     }
     html.light .ios-toast {
@@ -173,7 +204,7 @@
       box-shadow: 0 8px 24px rgba(0,0,0,0.1);
     }
     .ios-toast.show {
-      bottom: 40px;
+      bottom: var(--toast-bottom);
       opacity: 1;
       pointer-events: auto;
     }
@@ -229,7 +260,7 @@
     <div class="w-full space-y-6">
 
       <div class="w-full flex justify-center">
-        <label id="dropzoneLabel" for="fileInput" class="flex flex-col items-center justify-center w-full max-w-2xl h-44 border-2 border-gray-300 dark:border-gray-800 border-dashed rounded-3xl cursor-pointer bg-white dark:bg-[#0a0a0a] hover:bg-gray-50 dark:hover:bg-[#111111] transition-all duration-200 group mx-auto text-center">
+        <label id="dropzoneLabel" for="fileInput" class="flex flex-col items-center justify-center w-full max-w-2xl h-44 border-2 border-gray-300 dark:border-gray-800 rounded-3xl cursor-pointer bg-white dark:bg-[#0a0a0a] hover:bg-gray-50 dark:hover:bg-[#111111] transition-all duration-200 group mx-auto text-center">
           <div class="flex flex-col items-center justify-center pt-5 pb-6">
             <svg class="w-10 h-10 mb-4 text-gray-400 group-hover:text-black dark:group-hover:text-white transition-colors pointer-events-none" aria-hidden="true" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 20 16">
               <path stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 13h3a3 3 0 0 0 0-6h-.025A5.56 5.56 0 0 0 16 6.5 5.5 5.5 0 0 0 5.207 5.021C5.137 5.017 5.071 5 5 5a4 4 0 0 0 0 8h2.167M10 15V6m0 0L8 8m2-2 2 2"/>
@@ -438,10 +469,24 @@
         }
     }
 
+    function updateToastMenuPosition(menuOpen) {
+        const toast = document.getElementById('ios-toast');
+        const modal = document.getElementById('settings-modal');
+        if (menuOpen) {
+            const rect = modal.getBoundingClientRect();
+            const viewportHeight = window.innerHeight || document.documentElement.clientHeight;
+            const bottom = Math.max(12, viewportHeight - rect.top + 10);
+            toast.style.setProperty('--toast-bottom', `${bottom}px`);
+        } else {
+            toast.style.setProperty('--toast-bottom', 'calc(40px + env(safe-area-inset-bottom, 0px))');
+        }
+    }
+
     function showToast(msg) {
         const toast = document.getElementById('ios-toast');
         toast.innerText = msg;
         toast.classList.add('show');
+        updateToastMenuPosition(document.getElementById('settings-modal').classList.contains('active'));
         if (window.toastTimeout) clearTimeout(window.toastTimeout);
         window.toastTimeout = setTimeout(() => hideToast(), 3000);
     }
@@ -456,6 +501,9 @@
         document.getElementById('backdrop').classList.add('active');
         modal.style.transform = '';
         modal.classList.add('active');
+        requestAnimationFrame(() => {
+            requestAnimationFrame(() => updateToastMenuPosition(true));
+        });
     }
 
     function closeMenu() {
@@ -463,8 +511,23 @@
         document.getElementById('backdrop').classList.remove('active');
         const modal = document.getElementById('settings-modal');
         modal.classList.remove('active');
+        updateToastMenuPosition(false);
         setTimeout(() => modal.style.transform = '', 350);
     }
+
+    window.addEventListener('resize', () => {
+        if (document.getElementById('settings-modal').classList.contains('active')) {
+            updateToastMenuPosition(true);
+        }
+    });
+
+    window.addEventListener('orientationchange', () => {
+        setTimeout(() => {
+            if (document.getElementById('settings-modal').classList.contains('active')) {
+                updateToastMenuPosition(true);
+            }
+        }, 50);
+    });
 
     let swipeModal = null;
     let startY = 0;
